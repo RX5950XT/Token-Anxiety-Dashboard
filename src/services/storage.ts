@@ -1,0 +1,114 @@
+import { invoke } from "@tauri-apps/api/core";
+import { createDefaultState, normalizeDashboardState } from "../data/defaultState";
+import type { DashboardState, ProviderEnvironment } from "../types";
+
+const STORAGE_KEY = "token-anxiety-dashboard-state";
+const isTauriRuntime = () =>
+  typeof window !== "undefined" &&
+  (window.location.hostname.endsWith("tauri.localhost") || window.location.protocol === "tauri:");
+
+const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+async function invokeWithRetry<T>(command: string, payload?: Record<string, unknown>): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      return await invoke<T>(command, payload);
+    } catch (error) {
+      lastError = error;
+      if (!isTauriRuntime()) {
+        break;
+      }
+
+      await sleep(150);
+    }
+  }
+
+  throw lastError;
+}
+
+export async function loadDashboardState(): Promise<DashboardState> {
+  try {
+    const state = await invokeWithRetry<DashboardState>("load_dashboard_state");
+    return normalizeDashboardState(state);
+  } catch {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      const state = createDefaultState();
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      return state;
+    }
+
+    return normalizeDashboardState(JSON.parse(raw) as DashboardState);
+  }
+}
+
+export async function syncDashboardState(): Promise<DashboardState> {
+  try {
+    const state = await invokeWithRetry<DashboardState>("sync_dashboard_state");
+    return normalizeDashboardState(state);
+  } catch {
+    if (isTauriRuntime()) {
+      throw new Error("Failed to sync Tauri dashboard state");
+    }
+
+    return loadDashboardState();
+  }
+}
+
+export async function saveDashboardState(state: DashboardState): Promise<void> {
+  try {
+    await invokeWithRetry("save_dashboard_state", { state });
+    return;
+  } catch {
+    if (isTauriRuntime()) {
+      throw new Error("Failed to persist Tauri dashboard state");
+    }
+
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }
+}
+
+export async function scanProviderEnvironment(): Promise<ProviderEnvironment[]> {
+  try {
+    return invokeWithRetry<ProviderEnvironment[]>("scan_provider_environment");
+  } catch {
+    if (isTauriRuntime()) {
+      throw new Error("Failed to scan Tauri provider environment");
+    }
+
+    return [
+      {
+        provider: "claude-code",
+        label: "Claude Code",
+        detected: false,
+        source: "~/.claude",
+        detail: "瀏覽器預覽模式無法讀取本機 CLI。",
+      },
+      {
+        provider: "codex",
+        label: "Codex",
+        detected: false,
+        source: "~/.codex",
+        detail: "瀏覽器預覽模式無法讀取本機 CLI。",
+      },
+      {
+        provider: "gemini-cli",
+        label: "Gemini CLI",
+        detected: false,
+        source: "~/.gemini",
+        detail: "瀏覽器預覽模式無法讀取本機 CLI。",
+      },
+      {
+        provider: "opencode-go",
+        label: "OpenCode",
+        detected: false,
+        source: "~/.local/share/opencode/auth.json",
+        detail: "瀏覽器預覽模式無法讀取 OpenCode auth。",
+      },
+    ];
+  }
+}
+
+export { isTauriRuntime };
