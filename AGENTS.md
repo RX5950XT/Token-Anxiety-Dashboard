@@ -11,14 +11,14 @@
 - 前端使用 React + TypeScript + Vite。
 - 本地狀態由 Rust command 寫入 SQLite，避免只依賴瀏覽器 storage。
 - Provider adapter 必須明確標示資料可信度：`official`、`local`、`estimated`、`manual`。
-- 目前 `Codex` 與 `OpenCode` 已接上真實本機額度資料；`Claude Code` 與 `Gemini CLI` 先提供真實登入 / 設定狀態。
+- 四個 Provider 皆已接上真實本機額度資料：Claude Code（Anthropic OAuth API）、Codex（ChatGPT API）、Gemini CLI（Google cloudcode-pa API）、OpenCode（本地 SQLite db）。
 
 ## Provider 邊界
 
-- Claude Code：已支援 `claude auth status --json`；若沒有可安全讀取的本機額度視窗，不要偽造 quota。
-- Codex：已支援 `codex login status` 與本機 session `rate_limits` 解析。
-- Gemini CLI：已支援本機登入與設定檔偵測；若沒有穩定 quota 來源，維持無視窗狀態。
-- OpenCode：UI 名稱使用 OpenCode；官方方案名稱為 OpenCode Go。目前從本機 `opencode.db` 彙總真實 cost 視窗。
+- Claude Code：已支援 `claude auth status --json` 與 Anthropic OAuth API。API 失敗時 `merge_account_state` 會保留舊視窗長達 6 小時，避免閃爍。
+- Codex：已支援 `codex login status` 與 ChatGPT `/backend-api/wham/usage` API。
+- Gemini CLI：已支援本機 OAuth 登入與 Google `cloudcode-pa` API（兩步調用：`loadCodeAssist` 取 project ID → `retrieveUserQuota` 取額度）。按 Pro/Flash/Flash Lite 分類彙總，同類別取最低 `remainingFraction`。
+- OpenCode：UI 名稱使用 OpenCode；官方方案名稱為 OpenCode Go。從本機 `opencode.db` 彙總真實 cost 視窗。`$.cost` 為增量值，`SUM(cost)` 即為正確總用量。5h rolling reset = `max(time_created) + 5h`；weekly/monthly reset 由用戶在設定頁面手動指定。
 
 ## 品質要求
 

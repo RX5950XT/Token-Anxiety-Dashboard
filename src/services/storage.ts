@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { createDefaultState, normalizeDashboardState } from "../data/defaultState";
-import type { DashboardState, ProviderEnvironment } from "../types";
+import type { AppSettings, DashboardState, ProviderEnvironment } from "../types";
 
 const STORAGE_KEY = "token-anxiety-dashboard-state";
 const isTauriRuntime = () =>
@@ -108,6 +108,35 @@ export async function scanProviderEnvironment(): Promise<ProviderEnvironment[]> 
         detail: "瀏覽器預覽模式無法讀取 OpenCode auth。",
       },
     ];
+  }
+}
+
+export async function toggleDevtools(): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await invoke("toggle_devtools");
+}
+
+export async function getDebugLogs(): Promise<string[]> {
+  if (!isTauriRuntime()) return [];
+  return invoke<string[]>("get_debug_logs");
+}
+
+export async function loadSettings(): Promise<AppSettings> {
+  try {
+    return await invokeWithRetry<AppSettings>("get_settings");
+  } catch {
+    return {
+      locale: "zh-TW",
+      theme: "aurora",
+    };
+  }
+}
+
+export async function saveSettings(settings: AppSettings): Promise<void> {
+  try {
+    await invokeWithRetry("set_settings", { settings });
+  } catch {
+    // ignore
   }
 }
 

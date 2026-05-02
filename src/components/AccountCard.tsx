@@ -1,3 +1,4 @@
+import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import { defaultAnimateLayoutChanges, useSortable } from "@dnd-kit/sortable";
 import type { CSSProperties } from "react";
 import { providerMeta } from "../data/providers";
@@ -17,6 +18,7 @@ const statusKey = {
   warning: "statusWarning",
   limited: "statusLimited",
   disconnected: "statusDisconnected",
+  connected: "statusConnected",
 } as const;
 
 const accuracyKey = {
@@ -35,8 +37,8 @@ function AccountCardBody({
   listeners,
 }: AccountCardProps & {
   className: string;
-  attributes?: object;
-  listeners?: object;
+  attributes?: DraggableAttributes;
+  listeners?: DraggableSyntheticListeners;
 }) {
   const meta = providerMeta[account.provider];
   const status = deriveAccountStatus(account);
@@ -63,10 +65,10 @@ function AccountCardBody({
           const progress = getWindowProgress(window, Date.now(), locale);
 
           return (
-            <div className="quota-row" key={window.id}>
+              <div className="quota-row" key={window.id}>
               <div className="quota-head">
-                <strong>{formatWindowLabel(window, locale)}</strong>
-                <span>{progress.resetLabel}</span>
+                <strong>{window.label || formatWindowLabel(window, locale)}</strong>
+                {progress.resetLabel && <span>{progress.resetLabel}</span>}
               </div>
               <div className="progress-track">
                 <span style={{ width: `${progress.percentage}%` }} />

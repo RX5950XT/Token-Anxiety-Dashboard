@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import { t } from "../i18n";
 import type { AppSettings, LocaleId, ThemeId } from "../types";
+import type { MessageKey } from "../i18n";
 
 interface SettingsDialogProps {
   settings: AppSettings;
@@ -8,11 +9,44 @@ interface SettingsDialogProps {
   onChange: (settings: AppSettings) => void;
 }
 
+const DAYS_OF_WEEK: { value: number; label: MessageKey }[] = [
+  { value: 0, label: "sunday" },
+  { value: 1, label: "monday" },
+  { value: 2, label: "tuesday" },
+  { value: 3, label: "wednesday" },
+  { value: 4, label: "thursday" },
+  { value: 5, label: "friday" },
+  { value: 6, label: "saturday" },
+];
+
 export function SettingsDialog({ settings, onClose, onChange }: SettingsDialogProps) {
   const setLocale = (locale: LocaleId) => onChange({ ...settings, locale });
   const setTheme = (theme: ThemeId) => onChange({ ...settings, theme });
   const locales: LocaleId[] = ["zh-TW", "en"];
   const themes: ThemeId[] = ["aurora", "dark", "graphite", "light"];
+
+  const setWeeklyReset = (day: number, hour: number, minute: number) => {
+    onChange({
+      ...settings,
+      opencodeWeeklyReset: { day, hour, minute },
+    });
+  };
+
+  const setMonthlyReset = (day: number, hour: number, minute: number) => {
+    onChange({
+      ...settings,
+      opencodeMonthlyReset: { day, hour, minute },
+    });
+  };
+
+  const formatTime = (hour: number, minute: number) => {
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  };
+
+  const parseTime = (timeStr: string) => {
+    const [h, m] = timeStr.split(":").map(Number);
+    return { hour: h || 0, minute: m || 0 };
+  };
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -57,6 +91,89 @@ export function SettingsDialog({ settings, onClose, onChange }: SettingsDialogPr
                 </span>
               </button>
             ))}
+          </div>
+        </div>
+
+        {/* OpenCode Reset Settings */}
+        <div className="settings-group">
+          <span className="settings-label">{t(settings.locale, "opencodeResetSettings")}</span>
+          
+          {/* 5h Rolling - Read Only */}
+          <div className="reset-setting-row">
+            <span className="reset-setting-label">{t(settings.locale, "fiveHourRolling")}</span>
+            <span className="reset-setting-value readonly">
+              {t(settings.locale, "autoCalculate")}
+            </span>
+          </div>
+
+          {/* Weekly Reset */}
+          <div className="reset-setting-row">
+            <span className="reset-setting-label">{t(settings.locale, "weeklyReset")}</span>
+            <div className="reset-setting-controls">
+              <select
+                className="reset-select"
+                value={settings.opencodeWeeklyReset?.day ?? 1}
+                onChange={(e) => {
+                  const day = Number(e.target.value);
+                  const current = settings.opencodeWeeklyReset;
+                  setWeeklyReset(day, current?.hour ?? 7, current?.minute ?? 0);
+                }}
+              >
+                {DAYS_OF_WEEK.map((d) => (
+                  <option key={d.value} value={d.value}>
+                    {t(settings.locale, d.label)}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="time"
+                className="reset-time-input"
+                value={formatTime(
+                  settings.opencodeWeeklyReset?.hour ?? 7,
+                  settings.opencodeWeeklyReset?.minute ?? 0
+                )}
+                onChange={(e) => {
+                  const { hour, minute } = parseTime(e.target.value);
+                  const current = settings.opencodeWeeklyReset;
+                  setWeeklyReset(current?.day ?? 1, hour, minute);
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Monthly Reset */}
+          <div className="reset-setting-row">
+            <span className="reset-setting-label">{t(settings.locale, "monthlyReset")}</span>
+            <div className="reset-setting-controls">
+              <select
+                className="reset-select"
+                value={settings.opencodeMonthlyReset?.day ?? 1}
+                onChange={(e) => {
+                  const day = Number(e.target.value);
+                  const current = settings.opencodeMonthlyReset;
+                  setMonthlyReset(day, current?.hour ?? 0, current?.minute ?? 0);
+                }}
+              >
+                {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
+                  <option key={d} value={d}>
+                    {d}{t(settings.locale, "daySuffix")}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="time"
+                className="reset-time-input"
+                value={formatTime(
+                  settings.opencodeMonthlyReset?.hour ?? 0,
+                  settings.opencodeMonthlyReset?.minute ?? 0
+                )}
+                onChange={(e) => {
+                  const { hour, minute } = parseTime(e.target.value);
+                  const current = settings.opencodeMonthlyReset;
+                  setMonthlyReset(current?.day ?? 1, hour, minute);
+                }}
+              />
+            </div>
           </div>
         </div>
       </section>

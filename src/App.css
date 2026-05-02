@@ -59,8 +59,7 @@ button {
 }
 
 .top-bar,
-.card-grid,
-.data-notice {
+.card-grid {
   position: relative;
   z-index: 1;
 }
@@ -165,8 +164,7 @@ button {
 }
 
 .account-card,
-.modal,
-.data-notice {
+.modal {
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(19, 24, 25, 0.54);
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.24);
@@ -295,6 +293,12 @@ button {
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--accent), rgba(255, 255, 255, 0.94));
+  transition: width 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.account-card.connected .status-pill {
+  color: #e8f4ff;
+  background: #3a6ea5;
 }
 
 .card-footer {
@@ -304,24 +308,6 @@ button {
   margin-top: 18px;
   color: rgba(244, 241, 232, 0.68);
   font-size: 12px;
-}
-
-.data-notice {
-  display: grid;
-  gap: 6px;
-  margin-top: 22px;
-  padding: 14px 16px;
-  border-radius: 12px;
-}
-
-.data-notice strong {
-  color: #f0bd4f;
-  font-size: 13px;
-}
-
-.data-notice span {
-  color: rgba(244, 241, 232, 0.72);
-  font-size: 13px;
 }
 
 .modal-backdrop {
@@ -431,14 +417,12 @@ button {
 .theme-light .brand small,
 .theme-light .quota-foot,
 .theme-light .card-footer,
-.theme-light .data-notice span,
 .theme-light .settings-label {
   color: rgba(30, 37, 40, 0.72);
 }
 
 .theme-light .account-card,
-.theme-light .modal,
-.theme-light .data-notice {
+.theme-light .modal {
   background: rgba(255, 255, 255, 0.66);
 }
 
@@ -498,4 +482,97 @@ button {
   .card-footer {
     flex-direction: column;
   }
+}
+
+/* OpenCode Reset Settings */
+.reset-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.reset-setting-row:last-child {
+  border-bottom: none;
+}
+
+.reset-setting-label {
+  font-size: 13px;
+  color: rgba(244, 241, 232, 0.85);
+  flex-shrink: 0;
+}
+
+.reset-setting-value {
+  font-size: 13px;
+  color: rgba(244, 241, 232, 0.6);
+}
+
+.reset-setting-value.readonly {
+  font-style: italic;
+  color: rgba(244, 241, 232, 0.45);
+}
+
+.reset-setting-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.reset-select {
+  height: 36px;
+  min-height: 36px;
+  width: 90px;
+  padding: 0 8px;
+  border-radius: 8px;
+  background: rgba(30, 30, 35, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #f4f1e8;
+  font-size: 13px;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.reset-select option {
+  background: #2a2a30;
+  color: #f4f1e8;
+}
+
+.reset-time-input {
+  height: 36px;
+  min-height: 36px;
+  width: 90px;
+  padding: 0 8px;
+  border-radius: 8px;
+  background: rgba(30, 30, 35, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #f4f1e8;
+  font-size: 13px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.theme-light .reset-setting-label {
+  color: rgba(30, 37, 40, 0.85);
+}
+
+.theme-light .reset-setting-value {
+  color: rgba(30, 37, 40, 0.6);
+}
+
+.theme-light .reset-setting-value.readonly {
+  color: rgba(30, 37, 40, 0.45);
+}
+
+.theme-light .reset-select,
+.theme-light .reset-time-input {
+  background: rgba(0, 0, 0, 0.06);
+  border-color: rgba(0, 0, 0, 0.12);
+  color: #1e2528;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }

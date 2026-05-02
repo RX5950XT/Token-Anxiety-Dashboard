@@ -42,6 +42,12 @@ export function deriveAccountStatus(account: UsageAccount, now = Date.now()): Ac
     return "disconnected";
   }
 
+  // When a provider is logged in but has no quota windows, show "connected"
+  // instead of "available" to avoid implying unlimited quota.
+  if (account.windows.length === 0) {
+    return "connected";
+  }
+
   const statuses = account.windows.map((window) => getWindowProgress(window, now).status);
   if (statuses.includes("limited")) {
     return "limited";
@@ -55,6 +61,9 @@ export function deriveAccountStatus(account: UsageAccount, now = Date.now()): Ac
 }
 
 export function formatDurationUntil(isoDate: string, now = Date.now(), locale: LocaleId = "zh-TW"): string {
+  if (!isoDate || isoDate.trim() === "") {
+    return "";
+  }
   const target = new Date(isoDate).getTime();
   if (Number.isNaN(target)) {
     return t(locale, "needsCalibration");
@@ -65,20 +74,27 @@ export function formatDurationUntil(isoDate: string, now = Date.now(), locale: L
     return t(locale, "readyToRefresh");
   }
 
-  const totalMinutes = Math.ceil(diff / 60_000);
-  const days = Math.floor(totalMinutes / 1440);
-  const hours = Math.floor((totalMinutes % 1440) / 60);
-  const minutes = totalMinutes % 60;
+  const totalSeconds = Math.floor(diff / 1000);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
 
+  // Compact CC-Switch style for both locales
   if (days > 0) {
-    return locale === "zh-TW" ? `${days} ${t(locale, "day")} ${hours} ${t(locale, "hour")}` : `${days}${t(locale, "day")} ${hours}${t(locale, "hour")}`;
+    return `${days}${t(locale, "day")} ${hours}${t(locale, "hour")}`;
   }
 
   if (hours > 0) {
-    return locale === "zh-TW" ? `${hours} ${t(locale, "hour")} ${minutes} ${t(locale, "minute")}` : `${hours}${t(locale, "hour")} ${minutes}${t(locale, "minute")}`;
+    return `${hours}${t(locale, "hour")} ${minutes}${t(locale, "minute")}`;
   }
 
-  return locale === "zh-TW" ? `${minutes} ${t(locale, "minute")}` : `${minutes}${t(locale, "minute")}`;
+  if (minutes > 0) {
+    return `${minutes}${t(locale, "minute")}`;
+  }
+
+  // Show seconds when less than a minute remains
+  return `${seconds}${t(locale, "secondsShort")}`;
 }
 
 export function summarizeDashboard(state: DashboardState, now = Date.now(), locale: LocaleId = state.settings.locale) {

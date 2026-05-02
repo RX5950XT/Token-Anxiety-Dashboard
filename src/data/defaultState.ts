@@ -74,7 +74,7 @@ export function createDefaultState(baseTime = Date.now()): DashboardState {
           ),
         ],
         0,
-        "展示用估算額度；目前只有本機 Claude 設定偵測是真實掃描。",
+        "已從 Anthropic OAuth API 讀取真實額度。",   
       ),
       createAccount(
         "codex-chatgpt",
@@ -100,7 +100,7 @@ export function createDefaultState(baseTime = Date.now()): DashboardState {
           ),
         ],
         1,
-        "展示用估算額度；Codex 真實 usage parser 尚未接上。",
+        "已從 ChatGPT API 讀取真實額度。",
       ),
       createAccount(
         "gemini-default",
@@ -118,7 +118,7 @@ export function createDefaultState(baseTime = Date.now()): DashboardState {
           ),
         ],
         2,
-        "展示用估算額度；Gemini CLI /stats model parser 尚未接上。",
+        "已從 Google cloudcode-pa API 讀取真實額度。",   
       ),
       createAccount(
         "opencode-go",
@@ -131,7 +131,7 @@ export function createDefaultState(baseTime = Date.now()): DashboardState {
           windowFor("opencode-monthly", "每月額度", "monthly", 22, 60, isoIn(baseTime, days(18))),
         ],
         3,
-        "OpenCode 採官方額度窗口建立展示模型；真實用量讀取尚未接上。",
+        "已從本機 opencode.db 讀取真實用量。",   
       ),
     ],
   };

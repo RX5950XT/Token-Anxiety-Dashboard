@@ -2,7 +2,7 @@ export type ProviderId = "claude-code" | "codex" | "gemini-cli" | "opencode-go";
 
 export type AccuracyLevel = "official" | "local" | "estimated" | "manual";
 
-export type AccountStatus = "available" | "warning" | "limited" | "disconnected";
+export type AccountStatus = "available" | "warning" | "limited" | "disconnected" | "connected";
 
 export type RefreshWindowKind = "rolling-5h" | "daily" | "weekly" | "monthly";
 
@@ -32,9 +32,17 @@ export interface UsageAccount {
   order: number;
 }
 
+export interface OpenCodeResetConfig {
+  day: number;
+  hour: number;
+  minute: number;
+}
+
 export interface AppSettings {
   locale: LocaleId;
   theme: ThemeId;
+  opencodeWeeklyReset?: OpenCodeResetConfig;
+  opencodeMonthlyReset?: OpenCodeResetConfig;
 }
 
 export interface DashboardState {

@@ -30,11 +30,23 @@ describe("quota utilities", () => {
     expect(deriveAccountStatus(account, 0)).toBe("limited");
   });
 
-  it("formats reset countdowns in days, hours, and minutes", () => {
-    expect(formatDurationUntil(new Date(30 * 60_000).toISOString(), 0)).toBe("30 分");
-    expect(formatDurationUntil(new Date(2 * 60 * 60_000 + 5 * 60_000).toISOString(), 0)).toBe("2 小時 5 分");
-    expect(formatDurationUntil(new Date(2 * 24 * 60 * 60_000 + 60 * 60_000).toISOString(), 0)).toBe("2 天 1 小時");
+  it("returns connected when logged in but no windows", () => {
+    const account = {
+      ...createDefaultState(0).accounts[0],
+      status: "available" as const,
+      windows: [],
+    };
+    expect(deriveAccountStatus(account, 0)).toBe("connected");
+  });
+
+  it("formats reset countdowns in compact CC-Switch style", () => {
+    expect(formatDurationUntil(new Date(30 * 60_000).toISOString(), 0)).toBe("30分");
+    expect(formatDurationUntil(new Date(2 * 60 * 60_000 + 5 * 60_000).toISOString(), 0)).toBe("2小時 5分");
+    expect(formatDurationUntil(new Date(2 * 24 * 60 * 60_000 + 60 * 60_000).toISOString(), 0)).toBe("2天 1小時");
     expect(formatDurationUntil(new Date(2 * 60 * 60_000 + 5 * 60_000).toISOString(), 0, "en")).toBe("2h 5m");
+    // Less than a minute shows seconds
+    expect(formatDurationUntil(new Date(45 * 1000).toISOString(), 0)).toBe("45秒");
+    expect(formatDurationUntil(new Date(45 * 1000).toISOString(), 0, "en")).toBe("45s");
   });
 
   it("summarizes account counts and next reset", () => {
@@ -42,6 +54,6 @@ describe("quota utilities", () => {
     const summary = summarizeDashboard(state, 0);
 
     expect(summary.accountCount).toBe(4);
-    expect(summary.nextResetLabel).toBe("1 小時 36 分");
+    expect(summary.nextResetLabel).toBe("1小時 36分");
   });
 });
