@@ -1,6 +1,6 @@
 [package]
 name = "token-anxiety-dashboard"
-version = "0.1.1"
+version = "1.1.0"
 description = "Desktop quota dashboard for Claude Code, Codex, Gemini CLI, and OpenCode Go"
 authors = ["Token Anxiety Dashboard"]
 edition = "2021"
