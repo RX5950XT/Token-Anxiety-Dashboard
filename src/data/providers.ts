@@ -21,11 +21,11 @@ export const providerMeta: Record<
     accent: "#46a5ff",
     description: "追蹤 Codex / ChatGPT 訂閱額度與 reset 狀態。",
   },
-  "gemini-cli": {
-    label: "Gemini CLI",
-    shortLabel: "Gemini",
+  antigravity: {
+    label: "Antigravity",
+    shortLabel: "Antigravity",
     accent: "#59c889",
-    description: "依 Gemini CLI quota tier 顯示每日與模型用量。",
+    description: "讀取 Antigravity 登入憑證，分別顯示 Claude 與 Gemini 共用額度。",
   },
   "opencode-go": {
     label: "OpenCode",

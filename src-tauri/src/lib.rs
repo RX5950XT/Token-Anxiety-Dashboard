@@ -53,6 +53,8 @@ struct AppSettings {
     theme: String,
     opencode_weekly_reset: Option<OpenCodeResetConfig>,
     opencode_monthly_reset: Option<OpenCodeResetConfig>,
+    #[serde(default)]
+    visible_providers: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -119,24 +121,35 @@ struct ClaudeExtraUsage {
 }
 
 #[derive(Debug, Deserialize)]
-struct GeminiQuotaResponse {
-    buckets: Vec<GeminiQuotaBucket>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GeminiLoadCodeAssistResponse {
+struct AntigravityLoadResponse {
     #[serde(rename = "cloudaicompanionProject")]
     cloudaicompanion_project: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-struct GeminiQuotaBucket {
-    #[serde(rename = "resetTime")]
-    reset_time: String,
+struct AntigravityModelsResponse {
+    #[serde(default)]
+    models: HashMap<String, AntigravityModelInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AntigravityModelInfo {
+    #[serde(rename = "quotaInfo")]
+    quota_info: Option<AntigravityQuotaInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AntigravityQuotaInfo {
     #[serde(rename = "remainingFraction")]
-    remaining_fraction: f64,
-    #[serde(rename = "modelId")]
-    model_id: String,
+    remaining_fraction: Option<f64>,
+    #[serde(rename = "resetTime")]
+    reset_time: Option<String>,
+}
+
+struct AntigravityCreds {
+    access_token: String,
+    refresh_token: String,
+    expiry: Option<String>,
 }
 
 #[tauri::command]
@@ -170,7 +183,7 @@ fn scan_provider_environment() -> Vec<ProviderEnvironment> {
     vec![
         inspect_path("claude-code", "Claude Code", home.join(".claude")),
         inspect_path("codex", "Codex", home.join(".codex")),
-        inspect_path("gemini-cli", "Gemini CLI", home.join(".gemini")),
+        inspect_antigravity(),
         inspect_opencode(home),
     ]
 }
@@ -227,12 +240,11 @@ fn refresh_dashboard_state(existing: DashboardState) -> DashboardState {
             now,
         ),
         merge_account_state(
-            refresh_gemini_account(
-                home.join(".gemini"),
-                provider_context(&contexts, &default_state, "gemini-cli"),
+            refresh_antigravity_account(
+                provider_context(&contexts, &default_state, "antigravity"),
                 now,
             ),
-            existing.accounts.iter().find(|a| a.provider == "gemini-cli"),
+            existing.accounts.iter().find(|a| a.provider == "antigravity"),
             now,
         ),
         merge_account_state(
@@ -358,7 +370,7 @@ fn apply_claude_usage(account: &mut UsageAccount, usage: ClaudeUsageResponse, no
         let reset_at = fh.resets_at.unwrap_or_else(|| now.to_rfc3339());
         account.windows.push(window(
             "claude-5h",
-            "5 小時滾動",
+            "",
             "rolling-5h",
             fh.utilization,
             100.0,
@@ -370,7 +382,7 @@ fn apply_claude_usage(account: &mut UsageAccount, usage: ClaudeUsageResponse, no
         let reset_at = sd.resets_at.unwrap_or_else(|| now.to_rfc3339());
         account.windows.push(window(
             "claude-weekly",
-            "每週用量",
+            "",
             "weekly",
             sd.utilization,
             100.0,
@@ -433,19 +445,9 @@ fn fetch_codex_usage_from_api(token: &str) -> Result<CodexApiUsageResponse, Stri
     Err(last_error)
 }
 
-fn codex_window_seconds_to_label(secs: i64) -> String {
-    match secs {
-        18000 => "5 小時滾動".to_string(),
-        604800 => "每週用量".to_string(),
-        s => {
-            let hours = s / 3600;
-            if hours >= 24 {
-                format!("{} 天", hours / 24)
-            } else {
-                format!("{} 小時", hours)
-            }
-        }
-    }
+fn codex_window_seconds_to_label(_secs: i64) -> String {
+    // Labels are handled by frontend i18n formatWindowLabel based on window kind
+    String::new()
 }
 
 fn refresh_codex_account(
@@ -510,14 +512,18 @@ fn apply_codex_usage(
                 .limit_window_seconds
                 .map(codex_window_seconds_to_label)
                 .unwrap_or_else(|| "unknown".to_string());
-            let id = if idx == 0 { "codex-5h" } else { "codex-weekly" };
+            let (id, kind) = if idx == 0 {
+                ("codex-5h", "rolling-5h")
+            } else {
+                ("codex-weekly", "weekly")
+            };
             let reset_at = win
                 .reset_at
                 .and_then(|ts| DateTime::<Utc>::from_timestamp(ts, 0))
                 .unwrap_or(now)
                 .to_rfc3339();
             log_debug!("codex: window={} used={:.1}% reset_at={}", id, used, reset_at);
-            account.windows.push(window(id, &label, "rolling-5h", used, 100.0, &reset_at));
+            account.windows.push(window(id, &label, kind, used, 100.0, &reset_at));
         }
     } else {
         log_debug!("codex: API OK but no rate_limit in response");
@@ -533,130 +539,137 @@ fn apply_codex_usage(
     }
 }
 
-fn refresh_gemini_account(
-    gemini_dir: PathBuf,
-    context: ProviderContext,
-    now: DateTime<Utc>,
-) -> UsageAccount {
+fn refresh_antigravity_account(context: ProviderContext, now: DateTime<Utc>) -> UsageAccount {
     let mut account = base_account(
-        "gemini-default",
-        "gemini-cli",
-        "Gemini CLI",
-        "Gemini CLI",
+        "antigravity-default",
+        "antigravity",
+        "Antigravity",
+        "Antigravity",
         context.order,
         now,
     );
 
-    if !gemini_dir.exists() {
+    let Some(creds) = read_antigravity_credentials() else {
         account.status = "disconnected".to_string();
-        account.notes = "找不到 Gemini CLI 本機設定目錄。".to_string();
+        account.notes = "找不到 Antigravity 登入憑證（請先在 Antigravity 登入）。".to_string();
         return account;
-    }
+    };
 
-    // Try OAuth-backed quota API first
-    let oauth_token = read_gemini_oauth_token(&gemini_dir.join("oauth_creds.json"));
+    log_debug!(
+        "[DIAG] antigravity: creds read, access_token len={}, expiry={:?}",
+        creds.access_token.len(),
+        creds.expiry
+    );
 
-    if let Some(token) = oauth_token {
-        log_debug!("[DIAG] gemini: attempting API with token len={}", token.len());
-        
-        // Step 1: loadCodeAssist to get project ID
-        let project_id = match fetch_gemini_load_code_assist(&token) {
-            Ok(pid) => pid,
-            Err(e) => {
-                log_debug!("[DIAG] gemini: loadCodeAssist failed: {}", e);
-                None
+    // Use stored access_token; refresh proactively if expired / near expiry / unparseable.
+    let mut token = creds.access_token.clone();
+    if antigravity_token_expired(&creds.expiry, now) {
+        log_debug!("[DIAG] antigravity: token expired/near expiry, refreshing");
+        match refresh_antigravity_token(&creds.refresh_token) {
+            Ok(fresh) => {
+                log_debug!("[DIAG] antigravity: refresh OK, new token len={}", fresh.len());
+                token = fresh;
             }
-        };
-        
-        // Step 2: retrieveUserQuota with project ID
-        match fetch_gemini_quota(&token, project_id.as_deref()) {
-            Ok(quota) => {
-                apply_gemini_quota(&mut account, quota);
-                return account;
-            }
-            Err(error) => {
-                log_debug!("[DIAG] gemini: API FAILED: {}", error);
-                account.notes = format!("Google Quota API 失敗：{error}；改以設定檔偵測。");
-            }
+            Err(e) => log_debug!("[DIAG] antigravity: refresh FAILED: {e} (keeping stored token)"),
         }
     }
 
-    apply_gemini_fallback(&mut account, &gemini_dir);
+    let project_id = fetch_antigravity_project_id(&token);
+    match fetch_antigravity_models(&token, project_id.as_deref()) {
+        Ok(models) => apply_antigravity_quota(&mut account, models),
+        Err(error) if error == "HTTP 401" => {
+            // Stored/refreshed token rejected: force one more refresh and retry the whole flow.
+            log_debug!("[DIAG] antigravity: models 401, forcing refresh + retry");
+            match refresh_antigravity_token(&creds.refresh_token) {
+                Ok(fresh) => {
+                    let pid = fetch_antigravity_project_id(&fresh);
+                    match fetch_antigravity_models(&fresh, pid.as_deref()) {
+                        Ok(models) => apply_antigravity_quota(&mut account, models),
+                        Err(e2) => {
+                            log_debug!("[DIAG] antigravity: retry FAILED: {e2}");
+                            account.status = "connected".to_string();
+                            account.notes = format!("Antigravity 額度 API 失敗：{e2}。");
+                        }
+                    }
+                }
+                Err(e) => {
+                    log_debug!("[DIAG] antigravity: forced refresh FAILED: {e}");
+                    account.status = "connected".to_string();
+                    account.notes = "Antigravity token 更新失敗，請重新登入 Antigravity。".to_string();
+                }
+            }
+        }
+        Err(error) => {
+            log_debug!("[DIAG] antigravity: models FAILED: {error}");
+            account.status = "connected".to_string();
+            account.notes = format!("Antigravity 額度 API 失敗：{error}。");
+        }
+    }
+
     account
 }
 
-fn apply_gemini_fallback(account: &mut UsageAccount, gemini_dir: &Path) {
-    let active_email = read_active_gemini_email(&gemini_dir.join("google_accounts.json"));
-    let auth_type = read_gemini_auth_type(&gemini_dir.join("settings.json"));
-
-    if active_email.is_none() && auth_type.is_none() {
-        account.status = "disconnected".to_string();
-        account.notes = "Gemini CLI 已安裝，但目前未偵測到可用登入狀態。".to_string();
-        return;
-    }
-
-    account.status = "connected".to_string();
-    account.accuracy = "local".to_string();
-    account.plan_name = auth_type
-        .as_deref()
-        .map(title_case)
-        .unwrap_or_else(|| "Gemini CLI".to_string());
-    if account.notes.is_empty() {
-        account.notes = "已讀取 Gemini CLI 真實登入與本機設定；尚無額度視窗。".to_string();
-    }
-}
-
-fn apply_gemini_quota(account: &mut UsageAccount, quota: GeminiQuotaResponse) {
-    log_debug!("[DIAG] gemini: API OK, {} buckets", quota.buckets.len());
+fn apply_antigravity_quota(account: &mut UsageAccount, resp: AntigravityModelsResponse) {
+    log_debug!("[DIAG] antigravity: API OK, {} models", resp.models.len());
     account.status = "available".to_string();
     account.accuracy = "official".to_string();
-    account.plan_name = "Gemini".to_string();
-    account.notes = "已從 Google cloudcode-pa API 讀取真實額度。".to_string();
+    account.plan_name = "Antigravity".to_string();
+    account.notes = "已從 Google cloudcode-pa API（Antigravity）讀取真實額度。".to_string();
 
-    // Group buckets by model category (Pro/Flash/Flash Lite) and take
-    // the minimum remainingFraction for each category. This matches the
-    // behavior of CC-Switch and correctly aggregates multi-version buckets.
-    let mut category_map: HashMap<String, (f64, String)> = HashMap::new();
-    
-    for bucket in &quota.buckets {
-        let category = classify_gemini_model(&bucket.model_id).to_string();
-        let remaining = bucket.remaining_fraction.clamp(0.0, 1.0);
-        
-        let entry = category_map
-            .entry(category)
-            .or_insert((remaining, bucket.reset_time.clone()));
-        if remaining < entry.0 {
-            entry.0 = remaining;
-            entry.1 = bucket.reset_time.clone();
+    // Antigravity exposes per-model quota, but Claude models share one pool and
+    // Gemini models share another. Aggregate each family into a single window,
+    // taking the minimum remainingFraction (= highest usage) to be safe.
+    let mut claude: Option<(f64, String)> = None;
+    let mut gemini: Option<(f64, String)> = None;
+
+    for (name, info) in &resp.models {
+        let Some(qi) = &info.quota_info else { continue };
+        let Some(remaining) = qi.remaining_fraction else { continue };
+        let remaining = remaining.clamp(0.0, 1.0);
+        let reset = qi.reset_time.clone().unwrap_or_default();
+
+        let bucket = if name.starts_with("claude") {
+            &mut claude
+        } else if name.starts_with("gemini") {
+            &mut gemini
+        } else {
+            continue; // ignore gpt/image/chat/tab internal models
+        };
+
+        match bucket {
+            Some(entry) if remaining < entry.0 => {
+                entry.0 = remaining;
+                entry.1 = reset;
+            }
+            Some(_) => {}
+            None => *bucket = Some((remaining, reset)),
         }
     }
-    
-    log_debug!("[DIAG] gemini: aggregated into {} categories", category_map.len());
-    
-    // Convert to tiers (remainingFraction → utilization)
-    let mut tiers: Vec<_> = category_map
-        .into_iter()
-        .map(|(category, (remaining, reset_time))| {
-            let used = (1.0 - remaining) * 100.0;
-            let id = format!("gemini-{}", category.to_lowercase().replace(" ", "-"));
-            log_debug!(
-                "[DIAG] gemini: aggregated window={} class={} used={:.1}% remaining={:.2} reset={}",
-                id, category, used, remaining, reset_time
-            );
-            (id, category, used, reset_time)
-        })
-        .collect();
 
-    // Fixed order: Pro → Flash → Flash Lite
-    tiers.sort_by_key(|(_, category, _, _)| match category.as_str() {
-        "Pro" => 0,
-        "Flash" => 1,
-        "Flash Lite" => 2,
-        _ => 3,
-    });
+    // Fixed order: Claude first, then Gemini.
+    if let Some((remaining, reset)) = claude {
+        let used = (1.0 - remaining) * 100.0;
+        log_debug!(
+            "[DIAG] antigravity: aggregated Claude used={:.1}% remaining={:.2} reset={}",
+            used, remaining, reset
+        );
+        account
+            .windows
+            .push(window("antigravity-claude", "Claude", "daily", used, 100.0, &reset));
+    }
+    if let Some((remaining, reset)) = gemini {
+        let used = (1.0 - remaining) * 100.0;
+        log_debug!(
+            "[DIAG] antigravity: aggregated Gemini used={:.1}% remaining={:.2} reset={}",
+            used, remaining, reset
+        );
+        account
+            .windows
+            .push(window("antigravity-gemini", "Gemini", "daily", used, 100.0, &reset));
+    }
 
-    for (id, category, used, reset_time) in tiers {
-        account.windows.push(window(&id, &category, "daily", used, 100.0, &reset_time));
+    if account.windows.is_empty() {
+        account.notes = "Antigravity 已連線，但未取得 Claude/Gemini 額度資料。".to_string();
     }
 }
 
@@ -711,9 +724,9 @@ fn apply_opencode_windows(account: &mut UsageAccount, connection: &Connection, s
     let now_ms = now.timestamp_millis();
     log_debug!("[DIAG] opencode: db opened, now_ms={}", now_ms);
     let windows = [
-        ("opencode-5h", "5 小時滾動", "rolling-5h", 12.0, FIVE_HOURS_MS),
-        ("opencode-weekly", "每週使用量", "weekly", 30.0, SEVEN_DAYS_MS),
-        ("opencode-monthly", "每月使用量", "monthly", 60.0, THIRTY_DAYS_MS),
+        ("opencode-5h", "", "rolling-5h", 12.0, FIVE_HOURS_MS),
+        ("opencode-weekly", "", "weekly", 30.0, SEVEN_DAYS_MS),
+        ("opencode-monthly", "", "monthly", 60.0, THIRTY_DAYS_MS),
     ];
 
     for (id, label, kind, limit, width_ms) in windows {
@@ -887,6 +900,26 @@ fn inspect_opencode(home: PathBuf) -> ProviderEnvironment {
     }
 }
 
+fn inspect_antigravity() -> ProviderEnvironment {
+    let detected = read_antigravity_credentials().is_some();
+    let source = if cfg!(target_os = "windows") {
+        "Windows 憑證管理員: gemini:antigravity".to_string()
+    } else {
+        "（目前僅支援 Windows 讀取 Antigravity 憑證）".to_string()
+    };
+    ProviderEnvironment {
+        provider: "antigravity".to_string(),
+        label: "Antigravity".to_string(),
+        source,
+        detected,
+        detail: if detected {
+            "已找到 Antigravity 登入憑證。".to_string()
+        } else {
+            "尚未找到 Antigravity 登入憑證。".to_string()
+        },
+    }
+}
+
 fn default_app_settings() -> AppSettings {
     AppSettings {
         locale: "zh-TW".to_string(),
@@ -901,6 +934,7 @@ fn default_app_settings() -> AppSettings {
             hour: 0,
             minute: 0,
         }),
+        visible_providers: None,
     }
 }
 
@@ -918,10 +952,10 @@ fn default_dashboard_state() -> DashboardState {
             ),
             base_account("codex-chatgpt", "codex", "Codex", "Codex", 1, Utc::now()),
             base_account(
-                "gemini-default",
-                "gemini-cli",
-                "Gemini CLI",
-                "Gemini CLI",
+                "antigravity-default",
+                "antigravity",
+                "Antigravity",
+                "Antigravity",
                 2,
                 Utc::now(),
             ),
@@ -968,24 +1002,6 @@ fn window(id: &str, label: &str, kind: &str, used: f64, limit: f64, reset_at: &s
         limit,
         reset_at: reset_at.to_string(),
     }
-}
-
-fn read_active_gemini_email(path: &Path) -> Option<String> {
-    let raw = fs::read_to_string(path).ok()?;
-    let json = serde_json::from_str::<Value>(&raw).ok()?;
-    json.get("active")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-}
-
-fn read_gemini_auth_type(path: &Path) -> Option<String> {
-    let raw = fs::read_to_string(path).ok()?;
-    let json = serde_json::from_str::<Value>(&raw).ok()?;
-    json.get("security")?
-        .get("auth")?
-        .get("selectedType")?
-        .as_str()
-        .map(str::to_string)
 }
 
 fn query_opencode_cost(connection: &Connection, since_ms: i64) -> Result<f64, String> {
@@ -1146,89 +1162,217 @@ fn infer_claude_plan(usage: &ClaudeUsageResponse) -> String {
     }
 }
 
-fn read_gemini_oauth_token(oauth_path: &Path) -> Option<String> {
-    let raw = fs::read_to_string(oauth_path).ok()?;
-    let json: Value = serde_json::from_str(&raw).ok()?;
-    json.get("access_token")?
-        .as_str()
-        .map(String::from)
+// Antigravity uses Google's internal cloudcode-pa API (same family as the
+// retired Gemini CLI) but with ideType=ANTIGRAVITY and the fetchAvailableModels
+// endpoint. Antigravity's own built-in OAuth client (used only to refresh the
+// locally stored token) is injected at build time via environment variables so
+// the literals are never committed — see README「建置」. When unset, refresh is
+// skipped and a still-valid stored access_token is used as-is.
+const ANTIGRAVITY_CLIENT_ID: Option<&str> = option_env!("ANTIGRAVITY_CLIENT_ID");
+const ANTIGRAVITY_CLIENT_SECRET: Option<&str> = option_env!("ANTIGRAVITY_CLIENT_SECRET");
+const ANTIGRAVITY_USER_AGENT: &str = "vscode/1.X.X (Antigravity/4.2.1)";
+const ANTIGRAVITY_BASES: [&str; 3] = [
+    "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "https://daily-cloudcode-pa.googleapis.com",
+    "https://cloudcode-pa.googleapis.com",
+];
+
+/// Read the locally logged-in Antigravity token from the Windows Credential
+/// Manager (target `gemini:antigravity`). Antigravity 4.x stores its OAuth
+/// token there as a JSON blob: `{ "token": { access_token, refresh_token,
+/// expiry, .. }, "auth_method": .. }`.
+#[cfg(target_os = "windows")]
+fn read_antigravity_credentials() -> Option<AntigravityCreds> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[repr(C)]
+    struct Filetime {
+        _low: u32,
+        _high: u32,
+    }
+
+    #[repr(C)]
+    struct CredentialW {
+        _flags: u32,
+        _cred_type: u32,
+        _target_name: *const u16,
+        _comment: *const u16,
+        _last_written: Filetime,
+        credential_blob_size: u32,
+        credential_blob: *const u8,
+        _persist: u32,
+        _attribute_count: u32,
+        _attributes: *const std::ffi::c_void,
+        _target_alias: *const u16,
+        _user_name: *const u16,
+    }
+
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn CredReadW(
+            target_name: *const u16,
+            cred_type: u32,
+            flags: u32,
+            credential: *mut *mut CredentialW,
+        ) -> i32;
+        fn CredFree(buffer: *const std::ffi::c_void);
+    }
+
+    let target_wide: Vec<u16> = std::ffi::OsStr::new("gemini:antigravity")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    unsafe {
+        let mut cred_ptr: *mut CredentialW = std::ptr::null_mut();
+        // 1 = CRED_TYPE_GENERIC
+        if CredReadW(target_wide.as_ptr(), 1, 0, &mut cred_ptr) == 0 || cred_ptr.is_null() {
+            log_debug!("[DIAG] antigravity: CredReadW found no gemini:antigravity entry");
+            return None;
+        }
+        let cred = &*cred_ptr;
+        let bytes =
+            std::slice::from_raw_parts(cred.credential_blob, cred.credential_blob_size as usize)
+                .to_vec();
+        CredFree(cred_ptr as *const std::ffi::c_void);
+
+        let text = String::from_utf8(bytes).ok()?;
+        parse_antigravity_creds(&text)
+    }
 }
 
-fn fetch_gemini_load_code_assist(token: &str) -> Result<Option<String>, String> {
-    match ureq::post("https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")
-        .set("Authorization", &format!("Bearer {token}"))
-        .set("Content-Type", "application/json")
-        .set("Accept", "application/json")
+#[cfg(not(target_os = "windows"))]
+fn read_antigravity_credentials() -> Option<AntigravityCreds> {
+    None
+}
+
+fn parse_antigravity_creds(text: &str) -> Option<AntigravityCreds> {
+    let json: Value = serde_json::from_str(text).ok()?;
+    let token = json.get("token")?;
+    Some(AntigravityCreds {
+        access_token: token.get("access_token")?.as_str()?.to_string(),
+        refresh_token: token.get("refresh_token")?.as_str()?.to_string(),
+        expiry: token.get("expiry").and_then(Value::as_str).map(String::from),
+    })
+}
+
+/// Token is considered stale when expiry is missing, unparseable, or within
+/// 15 minutes of now. RFC3339 with offset/`Z` are both accepted.
+fn antigravity_token_expired(expiry: &Option<String>, now: DateTime<Utc>) -> bool {
+    match expiry {
+        Some(raw) => match DateTime::parse_from_rfc3339(raw) {
+            Ok(dt) => now + chrono::Duration::minutes(15) >= dt.with_timezone(&Utc),
+            Err(_) => true,
+        },
+        None => true,
+    }
+}
+
+fn refresh_antigravity_token(refresh_token: &str) -> Result<String, String> {
+    let (Some(client_id), Some(client_secret)) =
+        (ANTIGRAVITY_CLIENT_ID, ANTIGRAVITY_CLIENT_SECRET)
+    else {
+        return Err(
+            "未設定 ANTIGRAVITY_CLIENT_ID/SECRET build 環境變數，無法 refresh token".to_string(),
+        );
+    };
+    match ureq::post("https://oauth2.googleapis.com/token")
+        .set("User-Agent", ANTIGRAVITY_USER_AGENT)
         .timeout(std::time::Duration::from_secs(15))
-        .send_json(ureq::json!({
-            "metadata": {
-                "ideType": "GEMINI_CLI",
-                "pluginType": "GEMINI"
-            }
-        }))
-    {
+        .send_form(&[
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("refresh_token", refresh_token),
+            ("grant_type", "refresh_token"),
+        ]) {
         Ok(response) => {
-            let data: GeminiLoadCodeAssistResponse = response.into_json().map_err(|e| e.to_string())?;
-            let project_id = data.cloudaicompanion_project.as_ref()
-                .and_then(|s| s.split('/').last())
-                .map(String::from);
-            log_debug!("[DIAG] gemini: loadCodeAssist project_id={:?}", project_id);
-            Ok(project_id)
+            let json: Value = response.into_json().map_err(|e| e.to_string())?;
+            json.get("access_token")
+                .and_then(Value::as_str)
+                .map(String::from)
+                .ok_or_else(|| "refresh response missing access_token".to_string())
         }
-        Err(ureq::Error::Status(code, response)) => {
-            log_debug!("[DIAG] gemini: loadCodeAssist HTTP {code}, body={}", response.into_string().unwrap_or_default());
-            Ok(None) // Continue without project ID
-        }
-        Err(e) => {
-            log_debug!("[DIAG] gemini: loadCodeAssist error: {}", e);
-            Ok(None) // Continue without project ID
-        }
+        Err(ureq::Error::Status(code, _)) => Err(format!("HTTP {code}")),
+        Err(e) => Err(e.to_string()),
     }
 }
 
-fn fetch_gemini_quota(token: &str, project_id: Option<&str>) -> Result<GeminiQuotaResponse, String> {
-    let mut last_error = String::new();
-    let mut body = serde_json::Map::new();
-    if let Some(pid) = project_id {
-        body.insert("project".to_string(), serde_json::Value::String(pid.to_string()));
-    }
-    for attempt in 0..3 {
-        if attempt > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(500 * attempt as u64));
-        }
-        match ureq::post("https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")
+fn fetch_antigravity_project_id(token: &str) -> Option<String> {
+    for base in ANTIGRAVITY_BASES {
+        let url = format!("{base}/v1internal:loadCodeAssist");
+        match ureq::post(&url)
             .set("Authorization", &format!("Bearer {token}"))
             .set("Content-Type", "application/json")
             .set("Accept", "application/json")
+            .set("User-Agent", ANTIGRAVITY_USER_AGENT)
             .timeout(std::time::Duration::from_secs(15))
-            .send_json(ureq::json!(body))
+            .send_json(ureq::json!({ "metadata": { "ideType": "ANTIGRAVITY" } }))
         {
-            Ok(response) => return response.into_json().map_err(|e| e.to_string()),
-            Err(ureq::Error::Status(code, _)) => {
-                last_error = format!("HTTP {code}");
-                if code == 401 {
-                    break; // Token invalid, don't retry
+            Ok(response) => {
+                if let Ok(data) = response.into_json::<AntigravityLoadResponse>() {
+                    let project_id = data
+                        .cloudaicompanion_project
+                        .as_ref()
+                        .and_then(|s| s.split('/').last())
+                        .map(String::from);
+                    log_debug!(
+                        "[DIAG] antigravity: loadCodeAssist OK via {base}, project={:?}",
+                        project_id
+                    );
+                    return project_id;
                 }
             }
+            Err(ureq::Error::Status(code, _)) => {
+                log_debug!("[DIAG] antigravity: loadCodeAssist {base} HTTP {code}");
+            }
             Err(e) => {
-                last_error = e.to_string();
+                log_debug!("[DIAG] antigravity: loadCodeAssist {base} error: {e}");
+            }
+        }
+    }
+    None
+}
+
+fn fetch_antigravity_models(
+    token: &str,
+    project_id: Option<&str>,
+) -> Result<AntigravityModelsResponse, String> {
+    let mut last_error = String::new();
+    for base in ANTIGRAVITY_BASES {
+        let url = format!("{base}/v1internal:fetchAvailableModels");
+        // Try with project id first; on 403 retry the same base with empty body.
+        let bodies: Vec<Value> = match project_id {
+            Some(pid) => vec![ureq::json!({ "project": pid }), ureq::json!({})],
+            None => vec![ureq::json!({})],
+        };
+        for body in bodies {
+            match ureq::post(&url)
+                .set("Authorization", &format!("Bearer {token}"))
+                .set("Content-Type", "application/json")
+                .set("Accept", "application/json")
+                .set("User-Agent", ANTIGRAVITY_USER_AGENT)
+                .timeout(std::time::Duration::from_secs(15))
+                .send_json(body)
+            {
+                Ok(response) => return response.into_json().map_err(|e| e.to_string()),
+                Err(ureq::Error::Status(code, _)) => {
+                    last_error = format!("HTTP {code}");
+                    if code == 401 {
+                        return Err(last_error); // let caller refresh + retry
+                    }
+                    if code != 403 {
+                        break; // non-403: move to next base
+                    }
+                    // 403: fall through to retry this base with empty body
+                }
+                Err(e) => {
+                    last_error = e.to_string();
+                    break; // network error: move to next base
+                }
             }
         }
     }
     Err(last_error)
-}
-
-fn classify_gemini_model(model_id: &str) -> &str {
-    let lower = model_id.to_lowercase();
-    if lower.contains("flash-lite") {
-        "Flash Lite"
-    } else if lower.contains("flash") {
-        "Flash"
-    } else if lower.contains("pro") {
-        "Pro"
-    } else {
-        model_id
-    }
 }
 
 fn title_case(value: &str) -> String {
@@ -1348,5 +1492,57 @@ mod tests {
         let merged = merge_account_state(next, Some(&prev), now);
         assert_eq!(merged.status, "connected"); // not preserved, too old
         assert_eq!(merged.windows.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_antigravity_creds() {
+        let blob = r#"{"token":{"access_token":"AT","token_type":"Bearer","refresh_token":"RT","expiry":"2026-05-23T07:07:24.94+08:00"},"auth_method":"consumer"}"#;
+        let creds = parse_antigravity_creds(blob).expect("should parse");
+        assert_eq!(creds.access_token, "AT");
+        assert_eq!(creds.refresh_token, "RT");
+        assert_eq!(creds.expiry.as_deref(), Some("2026-05-23T07:07:24.94+08:00"));
+    }
+
+    #[test]
+    fn test_parse_antigravity_creds_rejects_missing_fields() {
+        assert!(parse_antigravity_creds(r#"{"auth_method":"consumer"}"#).is_none());
+        assert!(parse_antigravity_creds("not json").is_none());
+    }
+
+    #[test]
+    fn test_antigravity_token_expired() {
+        let now = Utc::now();
+        let fresh = (now + chrono::Duration::hours(1)).to_rfc3339();
+        let stale = (now - chrono::Duration::hours(1)).to_rfc3339();
+        assert!(!antigravity_token_expired(&Some(fresh), now));
+        assert!(antigravity_token_expired(&Some(stale), now));
+        assert!(antigravity_token_expired(&None, now)); // missing → refresh
+        assert!(antigravity_token_expired(&Some("garbage".to_string()), now)); // unparseable → refresh
+    }
+
+    #[test]
+    fn test_apply_antigravity_quota_two_pools_min_remaining() {
+        let json = r#"{
+            "models": {
+                "claude-sonnet-4-6": {"quotaInfo": {"remainingFraction": 0.8, "resetTime": "2026-05-24T08:54:55Z"}},
+                "claude-opus-4-6-thinking": {"quotaInfo": {"remainingFraction": 0.4, "resetTime": "2026-05-24T08:54:55Z"}},
+                "gemini-2.5-pro": {"quotaInfo": {"remainingFraction": 0.9, "resetTime": "2026-05-24T08:54:55Z"}},
+                "gemini-3-flash": {"quotaInfo": {"remainingFraction": 0.6, "resetTime": "2026-05-24T08:54:55Z"}},
+                "gpt-oss-120b-medium": {"quotaInfo": {"remainingFraction": 0.1, "resetTime": ""}}
+            }
+        }"#;
+        let resp: AntigravityModelsResponse = serde_json::from_str(json).unwrap();
+        let mut account = base_account("antigravity-default", "antigravity", "Antigravity", "Antigravity", 2, Utc::now());
+        apply_antigravity_quota(&mut account, resp);
+
+        assert_eq!(account.status, "available");
+        assert_eq!(account.windows.len(), 2); // gpt ignored
+        // Claude first (min remaining 0.4 → used 60%), then Gemini (min 0.6 → used 40%).
+        assert_eq!(account.windows[0].id, "antigravity-claude");
+        assert_eq!(account.windows[0].label, "Claude");
+        assert!((account.windows[0].used - 60.0).abs() < 0.001);
+        assert_eq!(account.windows[1].id, "antigravity-gemini");
+        assert_eq!(account.windows[1].label, "Gemini");
+        assert!((account.windows[1].used - 40.0).abs() < 0.001);
     }
 }

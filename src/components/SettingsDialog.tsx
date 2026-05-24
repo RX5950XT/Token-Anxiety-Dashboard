@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import { t } from "../i18n";
-import type { AppSettings, LocaleId, ThemeId } from "../types";
+import { providerOptions } from "../data/providers";
+import type { AppSettings, LocaleId, ProviderId, ThemeId } from "../types";
 import type { MessageKey } from "../i18n";
 
 interface SettingsDialogProps {
@@ -24,6 +25,17 @@ export function SettingsDialog({ settings, onClose, onChange }: SettingsDialogPr
   const setTheme = (theme: ThemeId) => onChange({ ...settings, theme });
   const locales: LocaleId[] = ["zh-TW", "en"];
   const themes: ThemeId[] = ["aurora", "dark", "graphite", "light"];
+
+  const allProviderIds = providerOptions.map((p) => p.id);
+  const isProviderVisible = (id: ProviderId) =>
+    settings.visibleProviders == null || settings.visibleProviders.includes(id);
+  const setProviderVisible = (id: ProviderId, visible: boolean) => {
+    const current = settings.visibleProviders ?? allProviderIds;
+    const next = visible
+      ? allProviderIds.filter((p) => current.includes(p) || p === id)
+      : current.filter((p) => p !== id);
+    onChange({ ...settings, visibleProviders: next });
+  };
 
   const setWeeklyReset = (day: number, hour: number, minute: number) => {
     onChange({
@@ -92,6 +104,23 @@ export function SettingsDialog({ settings, onClose, onChange }: SettingsDialogPr
               </button>
             ))}
           </div>
+        </div>
+
+        {/* Displayed items */}
+        <div className="settings-group">
+          <span className="settings-label">{t(settings.locale, "displaySettings")}</span>
+          <span className="reset-setting-value">{t(settings.locale, "displaySettingsHint")}</span>
+          {providerOptions.map((provider) => (
+            <label className="reset-setting-row" key={provider.id}>
+              <span className="reset-setting-label">{provider.label}</span>
+              <input
+                type="checkbox"
+                className="provider-toggle-checkbox"
+                checked={isProviderVisible(provider.id)}
+                onChange={(e) => setProviderVisible(provider.id, e.target.checked)}
+              />
+            </label>
+          ))}
         </div>
 
         {/* OpenCode Reset Settings */}

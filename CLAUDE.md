@@ -13,6 +13,7 @@
 - Provider adapter 必須明確標示資料可信度：`official`、`local`、`estimated`、`manual`。
 - **同步改為手動**：右上角「同步」按鈕觸發，無自動定時刷新，避免背景耗額。
 - **F12 開啟 DevTools**：便於查看 `[Backend Diagnostics]` 後端除錯日誌群組。
+- **顯示項目設定**：設定頁可勾選顯示哪些 provider，存於 `AppSettings.visibleProviders`（`undefined` = 全部顯示）；前端 `App.tsx` 以此過濾卡片。
 
 ## Provider 邊界與資料來源
 
@@ -20,7 +21,7 @@
 |----------|---------|---------|------|
 | Claude Code | `~/.claude/.credentials.json` → Anthropic OAuth API | 5h rolling、7d weekly | 失敗時保留舊視窗最多 6 小時 |
 | Codex | `~/.codex/auth.json` → ChatGPT `/backend-api/wham/usage` | 5h rolling、weekly | 使用 ChatGPT access_token |
-| Gemini CLI | `~/.gemini/oauth_creds.json` → Google cloudcode-pa API | Pro、Flash、Flash Lite 每日視窗 | 兩步調用（loadCodeAssist → retrieveUserQuota），按類別聚合取最低 remainingFraction |
+| Antigravity | Windows 憑證管理員 `gemini:antigravity` → Google cloudcode-pa API | Claude、Gemini 各一條共用額度 | 兩步調用（loadCodeAssist `ideType=ANTIGRAVITY` → fetchAvailableModels）；`claude-*`/`gemini-*` 各聚合取最低 remainingFraction；token 過期以內建 client refresh |
 | OpenCode | `~/.local/share/opencode/opencode.db` | 5h rolling、7d、30d cost | 5h: `reset` = `max(time_created) + width`；weekly/monthly: **用戶手動設定重置時間** |
 
 - Windows 外部 CLI 呼叫帶 `CREATE_NO_WINDOW`，不彈出終端機視窗。
@@ -88,28 +89,27 @@ npx tauri build
 
 ---
 
-### 二、Gemini CLI 的 Quota API
+### 二、Antigravity 的 Quota API（取代已淘汰的 Gemini CLI）
 
-**檔案位置**：`src-tauri/src/lib.rs` → `fetch_gemini_load_code_assist`、`fetch_gemini_quota`、`apply_gemini_quota`
+**檔案位置**：`src-tauri/src/lib.rs` → `read_antigravity_credentials`、`refresh_antigravity_token`、`fetch_antigravity_project_id`、`fetch_antigravity_models`、`apply_antigravity_quota`、`refresh_antigravity_account`
 
-**API 調用流程**（與 CC-Switch 一致）：
-1. `POST /v1internal:loadCodeAssist` → 獲取 `cloudaicompanionProject` ID
-2. `POST /v1internal:retrieveUserQuota` → 帶入 `{ "project": "<project_id>" }` 獲取 buckets
+**本機憑證來源**：Antigravity 4.x 把登入 token 寫進 **Windows 憑證管理員**，target `gemini:antigravity`（type GENERIC），blob 為 UTF-8 JSON：`{ "token": { "access_token", "refresh_token", "expiry"(RFC3339) }, "auth_method" }`。用 Win32 FFI `CredReadW`/`CredFree` 讀取（僅 Windows）。
 
-**認證**：Bearer token（來自 `~/.gemini/oauth_creds.json` 的 `access_token`）
+**Token 更新**：解析 `expiry`，過期/接近過期（skew 15 分）/無法解析時，用 Antigravity 內建 OAuth client（`oauth2.googleapis.com/token`，grant_type=refresh_token）refresh，只在記憶體用新 token，**不寫回憑證管理員**。models 回 401 時再強制 refresh 重試一次。client_id/secret **不硬編碼**，改由建置時環境變數 `ANTIGRAVITY_CLIENT_ID`/`ANTIGRAVITY_CLIENT_SECRET` 經 `option_env!` 注入（見 README「發佈建置」）；未設定則略過 refresh。
 
-**回傳格式**：`buckets` 陣列，每個 bucket 有：
-- `modelId`：如 `gemini-2.5-flash`、`gemini-2.5-pro`
-- `remainingFraction`：0~1 的浮點數（剩餘比例）
-- `resetTime`：ISO 8601 字串
+**API 調用流程**：
+1. `POST {base}/v1internal:loadCodeAssist`，body `{"metadata":{"ideType":"ANTIGRAVITY"}}` → 取 `cloudaicompanionProject`
+2. `POST {base}/v1internal:fetchAvailableModels`，body `{"project": pid}`（403 則去掉 project 重試）
+- base fallback：`daily-cloudcode-pa.sandbox` → `daily-cloudcode-pa` → `cloudcode-pa`
+- Header：Bearer token + `User-Agent: vscode/1.X.X (Antigravity/4.2.1)`
 
-**數據處理**：按模型分類彙總（Pro / Flash / Flash Lite）
-- 同一類別有多個 bucket 時，取 **最低 remainingFraction**（即最高使用量）
-- 同時記錄對應的 reset_time
+**回傳格式**：`models` 物件，每個 model 的 `quotaInfo.remainingFraction`(0~1) 與 `quotaInfo.resetTime`(RFC3339)。
+
+**數據處理（兩條共用額度）**：`claude-*` 聚合為一條 "Claude"、`gemini-*` 聚合為一條 "Gemini"（忽略 gpt/image/chat/tab），各取**最低 remainingFraction**；同一張卡片顯示兩條 bar，固定順序 Claude → Gemini。
 
 **已用%計算**：`used = (1.0 - min_remainingFraction) * 100.0`
 
-**診斷方式**：F12 Console 中看 `[DIAG] gemini: aggregated window=XX class=YY used=ZZ remaining=WW reset=VV`。
+**診斷方式**：F12 Console 看 `[DIAG] antigravity: aggregated Claude/Gemini used=.. remaining=.. reset=..`。
 
 ---
 
@@ -166,9 +166,10 @@ log_debug!("[DIAG] provider: key={} value={}", key, value);
 1. **OpenCode `$.cost` 是增量值**：`part` 表的 `step-finish` 事件，`$.cost` 存的是**單次 step 的成本**，不是累計值。正確做法：`SUM(cost)` 即為窗口總用量。曾經誤以為是累計值而寫了 delta 邏輯，導致 used% 偏低。
 2. **OpenCode 5h reset = `max(time_created) + 5h`**：曾誤用 `min(time_created) + 5h`，導致 reset 時間固定為窗口最舊記錄 + 5h，永遠不歸零。正確應該用**最新使用時間** + 5h。
 3. **OpenCode weekly/monthly 必須手動設定**：從本地 DB 無法推斷用戶的實際重置時間（數據不足）。UI 提供 day-of-week + time picker（weekly）和 day-of-month + time picker（monthly），儲存在 `app_settings`。
-4. **Gemini 必須兩步調用**：單獨呼叫 `retrieveUserQuota` 帶空 `project` 會得到不準確數據。正確流程：先 `loadCodeAssist` 取 `cloudaicompanionProject` ID，再帶入 `retrieveUserQuota`。
-5. **Gemini 按類別聚合取最低 remainingFraction**：API 可能對同一類別（Pro）返回多個 bucket（不同版本），應取最低 `remainingFraction`（即最高使用量），而不是獨立顯示每個 bucket。
-6. **Claude API 429 處理**：Anthropic OAuth API 經常 429。`merge_account_state` 的 360 分鐘快取是必要設計，避免視窗閃爍消失。
+4. **Antigravity 憑證在 Windows 憑證管理員**：不是檔案。target `gemini:antigravity`，需 `CredReadW` 讀取。憑證裡的 `expiry`/API 的 `resetTime` 皆為 RFC3339（注意：PowerShell `ConvertFrom-Json` 會把它顯示成 `MM/DD/YYYY`，那是顯示假象，原始值是 RFC3339）。
+5. **Antigravity access_token 常已過期**：App 不在前景時 token 不會被刷新，讀到多半過期，故務必依 `expiry` 主動 refresh（並保留 401 重試）。refresh_token 不變、不要寫回憑證管理員。
+6. **Antigravity 兩條共用額度**：`claude-*` 共用一池、`gemini-*` 共用另一池，各取最低 `remainingFraction` 聚合成一條，不要逐模型顯示。
+7. **Claude API 429 處理**：Anthropic OAuth API 經常 429。`merge_account_state` 的 360 分鐘快取是必要設計，避免視窗閃爍消失。
 
 ### 七、常見問題速查
 
@@ -177,8 +178,8 @@ log_debug!("[DIAG] provider: key={} value={}", key, value);
 | OpenCode 5h reset 時間過長（>4h） | `query_trailing_reset_at` 用了 `min` 而非 `max` | 檢查 F12 日誌中 `oldest record` vs `newest record`，reset 應為 newest + 5h |
 | OpenCode used% 遠低於官方 | 把 `$.cost` 當成累計值，做了不必要的 delta 計算 | 檢查 `query_opencode_cost` 是否直接用 `SUM(cost)` |
 | OpenCode weekly/monthly reset 不對 | 使用了硬編碼時間而非用戶設定 | 檢查 `get_settings` 是否讀到正確的 `opencode_weekly/monthly_reset` |
-| Gemini used% 與官網差很多 | 沒帶 `project` ID 或沒按類別聚合 | 檢查 F12 日誌是否有 `loadCodeAssist` 成功，以及是否顯示 `aggregated window` |
-| Gemini 三個視窗 reset 都相同 | API 本來就回傳 +24h，這是正常現象 | 檢查 F12 日誌中各 bucket 的原始 `reset` 值 |
+| Antigravity 顯示未連線 | Windows 憑證管理員無 `gemini:antigravity` | `cmdkey /list` 確認；請先在 Antigravity 登入 |
+| Antigravity Claude/Gemini 皆 0% 或 API 失敗 | access_token 過期且 refresh 失敗 | 看 F12 `antigravity:` 日誌的 refresh 結果；必要時重新登入 Antigravity |
 | Claude 視窗消失後又出現 | `merge_account_state` 360 分鐘快取生效 | 這是 feature，不是 bug |
 | 同步後 Console 無日誌 | `get_debug_logs` 呼叫失敗或無日誌產生 | 檢查 Rust 端是否有 `log_debug!` 呼叫 |
 
@@ -187,7 +188,7 @@ log_debug!("[DIAG] provider: key={} value={}", key, value);
 ### 八、外部參考連結
 
 - **OpenCode 官方（Crush 前身）**：https://github.com/opencode-ai/opencode（已 archive，轉移至 charmbracelet/crush）
-- **Gemini CLI**：https://github.com/google-gemini/gemini-cli
+- **Antigravity-Manager（憑證/quota API 參考）**：https://github.com/lbjlaq/Antigravity-Manager
 - **CC-Switch 作者**：GitHub @jonz94（原始碼未公開，功能類似本專案）
 - **Tauri 文件**：https://tauri.app/
 - **Anthropic OAuth API 文件**：內部 beta，無公開文件（參考 `oauth-2025-04-20` header）

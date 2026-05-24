@@ -1,4 +1,4 @@
-export type ProviderId = "claude-code" | "codex" | "gemini-cli" | "opencode-go";
+export type ProviderId = "claude-code" | "codex" | "antigravity" | "opencode-go";
 
 export type AccuracyLevel = "official" | "local" | "estimated" | "manual";
 
@@ -43,6 +43,8 @@ export interface AppSettings {
   theme: ThemeId;
   opencodeWeeklyReset?: OpenCodeResetConfig;
   opencodeMonthlyReset?: OpenCodeResetConfig;
+  /** Providers to show on the dashboard. Undefined = show all. */
+  visibleProviders?: ProviderId[];
 }
 
 export interface DashboardState {

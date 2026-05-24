@@ -58,7 +58,7 @@ export function createDefaultState(baseTime = Date.now()): DashboardState {
         [
           windowFor(
             "claude-5h",
-            "5 小時滾動",
+            "",
             "rolling-5h",
             62,
             100,
@@ -66,7 +66,7 @@ export function createDefaultState(baseTime = Date.now()): DashboardState {
           ),
           windowFor(
             "claude-weekly",
-            "每週用量",
+            "",
             "weekly",
             38,
             100,
@@ -84,7 +84,7 @@ export function createDefaultState(baseTime = Date.now()): DashboardState {
         [
           windowFor(
             "codex-5h",
-            "Codex session",
+            "",
             "rolling-5h",
             45,
             100,
@@ -92,7 +92,7 @@ export function createDefaultState(baseTime = Date.now()): DashboardState {
           ),
           windowFor(
             "codex-weekly",
-            "每週用量",
+            "",
             "weekly",
             28,
             100,
@@ -103,22 +103,30 @@ export function createDefaultState(baseTime = Date.now()): DashboardState {
         "已從 ChatGPT API 讀取真實額度。",
       ),
       createAccount(
-        "gemini-default",
-        "gemini-cli",
-        "Gemini CLI",
-        "Gemini Code Assist",
+        "antigravity-default",
+        "antigravity",
+        "Antigravity",
+        "Antigravity",
         [
           windowFor(
-            "gemini-daily",
-            "每日請求",
+            "antigravity-claude",
+            "Claude",
             "daily",
-            210,
-            1000,
+            32,
+            100,
+            isoIn(baseTime, hours(14)),
+          ),
+          windowFor(
+            "antigravity-gemini",
+            "Gemini",
+            "daily",
+            58,
+            100,
             isoIn(baseTime, hours(14)),
           ),
         ],
         2,
-        "已從 Google cloudcode-pa API 讀取真實額度。",   
+        "已從 Google cloudcode-pa API（Antigravity）讀取真實額度。",
       ),
       createAccount(
         "opencode-go",
@@ -126,9 +134,9 @@ export function createDefaultState(baseTime = Date.now()): DashboardState {
         "OpenCode",
         "OpenCode Go",
         [
-          windowFor("opencode-5h", "5 小時額度", "rolling-5h", 4.2, 12, isoIn(baseTime, hours(1.6))),
-          windowFor("opencode-weekly", "每週額度", "weekly", 14, 30, isoIn(baseTime, days(4.5))),
-          windowFor("opencode-monthly", "每月額度", "monthly", 22, 60, isoIn(baseTime, days(18))),
+          windowFor("opencode-5h", "", "rolling-5h", 4.2, 12, isoIn(baseTime, hours(1.6))),
+          windowFor("opencode-weekly", "", "weekly", 14, 30, isoIn(baseTime, days(4.5))),
+          windowFor("opencode-monthly", "", "monthly", 22, 60, isoIn(baseTime, days(18))),
         ],
         3,
         "已從本機 opencode.db 讀取真實用量。",   

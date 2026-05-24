@@ -34,9 +34,14 @@ function App() {
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 1 } }));
   const sortedAccounts = useMemo(() => [...state.accounts].sort((a, b) => a.order - b.order), [state.accounts]);
+  const visibleAccounts = useMemo(() => {
+    const visible = state.settings.visibleProviders;
+    if (!visible) return sortedAccounts;
+    return sortedAccounts.filter((account) => visible.includes(account.provider));
+  }, [sortedAccounts, state.settings.visibleProviders]);
   const activeAccount = useMemo(
-    () => sortedAccounts.find((account) => account.id === activeId) ?? null,
-    [activeId, sortedAccounts],
+    () => visibleAccounts.find((account) => account.id === activeId) ?? null,
+    [activeId, visibleAccounts],
   );
   const environmentByProvider = useMemo(
     () => new Map(environments.map((environment) => [environment.provider, environment])),
@@ -161,9 +166,9 @@ function App() {
         onDragEnd={handleDragEnd}
         onDragCancel={() => setActiveId(null)}
       >
-        <SortableContext items={sortedAccounts.map((account) => account.id)} strategy={rectSortingStrategy}>
+        <SortableContext items={visibleAccounts.map((account) => account.id)} strategy={rectSortingStrategy}>
           <section className="card-grid" aria-label={t(state.settings.locale, "cardsRegion")}>
-            {sortedAccounts.map((account) => (
+            {visibleAccounts.map((account) => (
               <AccountCard
                 account={account}
                 environment={environmentByProvider.get(account.provider)}

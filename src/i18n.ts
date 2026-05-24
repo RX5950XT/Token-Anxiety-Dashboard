@@ -62,6 +62,8 @@ const dictionary = {
     friday: "週五",
     saturday: "週六",
     daySuffix: "號",
+    displaySettings: "顯示項目",
+    displaySettingsHint: "勾選要在儀表板顯示的項目。",
   },
   en: {
     settings: "Settings",
@@ -124,6 +126,8 @@ const dictionary = {
     friday: "Friday",
     saturday: "Saturday",
     daySuffix: "",
+    displaySettings: "Displayed items",
+    displaySettingsHint: "Choose which items appear on the dashboard.",
   },
 } as const;
 

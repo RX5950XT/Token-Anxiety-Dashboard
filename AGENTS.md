@@ -11,13 +11,14 @@
 - 前端使用 React + TypeScript + Vite。
 - 本地狀態由 Rust command 寫入 SQLite，避免只依賴瀏覽器 storage。
 - Provider adapter 必須明確標示資料可信度：`official`、`local`、`estimated`、`manual`。
-- 四個 Provider 皆已接上真實本機額度資料：Claude Code（Anthropic OAuth API）、Codex（ChatGPT API）、Gemini CLI（Google cloudcode-pa API）、OpenCode（本地 SQLite db）。
+- 四個 Provider 皆已接上真實本機額度資料：Claude Code（Anthropic OAuth API）、Codex（ChatGPT API）、Antigravity（Windows 憑證管理員 → Google cloudcode-pa API）、OpenCode（本地 SQLite db）。
+- 設定頁的「顯示項目」可勾選要顯示哪些 provider，儲存於 `AppSettings.visibleProviders`（`undefined` = 全部顯示）。
 
 ## Provider 邊界
 
 - Claude Code：已支援 `claude auth status --json` 與 Anthropic OAuth API。API 失敗時 `merge_account_state` 會保留舊視窗長達 6 小時，避免閃爍。
 - Codex：已支援 `codex login status` 與 ChatGPT `/backend-api/wham/usage` API。
-- Gemini CLI：已支援本機 OAuth 登入與 Google `cloudcode-pa` API（兩步調用：`loadCodeAssist` 取 project ID → `retrieveUserQuota` 取額度）。按 Pro/Flash/Flash Lite 分類彙總，同類別取最低 `remainingFraction`。
+- Antigravity（取代已淘汰的 Gemini CLI）：從 Windows 憑證管理員 `gemini:antigravity` 讀取登入 token，access_token 過期時用內建 OAuth client refresh。兩步調用 Google `cloudcode-pa`（`loadCodeAssist` 帶 `ideType=ANTIGRAVITY` 取 project ID → `fetchAvailableModels` 取各模型額度）。`claude-*` 聚合為 Claude 一條、`gemini-*` 聚合為 Gemini 一條，各取最低 `remainingFraction`，於同一張卡片顯示兩條 bar。憑證讀取目前僅 Windows。
 - OpenCode：UI 名稱使用 OpenCode；官方方案名稱為 OpenCode Go。從本機 `opencode.db` 彙總真實 cost 視窗。`$.cost` 為增量值，`SUM(cost)` 即為正確總用量。5h rolling reset = `max(time_created) + 5h`；weekly/monthly reset 由用戶在設定頁面手動指定。
 
 ## 品質要求
@@ -42,7 +43,17 @@ cargo check
 <claude-mem-context>
 # Memory Context
 
-# [Token-Anxiety-Dashboard] recent context, 2026-05-01 5:50am GMT+8
+# [Token-Anxiety-Dashboard] recent context, 2026-05-15 2:29am GMT+8
 
-No previous sessions found.
+Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
+Format: ID TIME TYPE TITLE
+Fetch details: get_observations([IDs]) | Search: mem-search skill
+
+Stats: 2 obs (962t read) | 19,964t work | 95% savings
+
+### May 15, 2026
+1016 2:27a 🔵 Token-Anxiety-Dashboard API Call Patterns — On-Demand, Not Polled
+1017 2:28a 🔵 Dashboard API Sync Triggered Only at Startup and Manual Button Click
+
+Access 20k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>

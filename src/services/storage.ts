@@ -94,11 +94,11 @@ export async function scanProviderEnvironment(): Promise<ProviderEnvironment[]> 
         detail: "瀏覽器預覽模式無法讀取本機 CLI。",
       },
       {
-        provider: "gemini-cli",
-        label: "Gemini CLI",
+        provider: "antigravity",
+        label: "Antigravity",
         detected: false,
-        source: "~/.gemini",
-        detail: "瀏覽器預覽模式無法讀取本機 CLI。",
+        source: "Windows 憑證管理員: gemini:antigravity",
+        detail: "瀏覽器預覽模式無法讀取本機憑證。",
       },
       {
         provider: "opencode-go",
