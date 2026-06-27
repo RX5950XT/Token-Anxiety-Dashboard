@@ -57,12 +57,19 @@ $env:ANTIGRAVITY_CLIENT_SECRET = "<antigravity_oauth_client_secret>"
 npx tauri build
 ```
 
-建置完成後，**無論是誰建置，路徑結構都相同**（Tauri 預設行為）：
+建置完成後，安裝檔檔名與 **GitHub Releases 附件一致**（`productName` 使用 `Token.Anxiety.Dashboard`，版本號取自 `package.json`）：
 
-- **MSI 安裝程式**：`src-tauri/target/release/bundle/msi/Token Anxiety Dashboard_0.1.1_x64_en-US.msi`
-- **NSIS 安裝程式**：`src-tauri/target/release/bundle/nsis/Token Anxiety Dashboard_0.1.1_x64-setup.exe`
+- **NSIS 安裝程式**：`src-tauri/target/release/bundle/nsis/Token.Anxiety.Dashboard_<version>_x64-setup.exe`
+- **MSI 安裝程式**：`src-tauri/target/release/bundle/msi/Token.Anxiety.Dashboard_<version>_x64_en-US.msi`
 
-直接雙擊 `.msi` 或 `-setup.exe` 即可安裝到 Windows 系統。
+例（v1.2.1）：
+
+- `src-tauri/target/release/bundle/nsis/Token.Anxiety.Dashboard_1.2.1_x64-setup.exe`
+- `src-tauri/target/release/bundle/msi/Token.Anxiety.Dashboard_1.2.1_x64_en-US.msi`
+
+上傳前可用 `npm run release:assets` 印出目前版本的完整路徑。發佈到 GitHub 時請**建立新 tag／新 release**，不要用 `--clobber` 覆蓋舊版附件。
+
+直接雙擊 `.msi` 或 `-setup.exe` 即可安裝到 Windows 系統。視窗標題仍顯示「Token Anxiety Dashboard」（與安裝檔檔名分開設定）。
 
 > **注意**：`target/` 目錄在 `.gitignore` 中，不會提交到 git。每個接手者都必須自行執行 `npx tauri build` 產出安裝檔。
 

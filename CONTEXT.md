@@ -45,6 +45,11 @@ Tauri 2 桌面額度儀表板，手動同步顯示 Claude Code / Codex / Antigra
 - **設定頁黑屏**：Rust `Option<Vec<String>>` 的 `None` 序列化成 JSON **`null`**（非 `undefined`）。`SettingsDialog` 的 `isProviderVisible` 原本用 `=== undefined` 判斷，遇到 null 仍呼叫 `null.includes()` → React 整棵崩潰 → 黑屏。改用 `== null`（涵蓋 null/undefined）。教訓：**Rust None → JSON null，前端要用 `== null` 或 `!value`，不要只判 `=== undefined`**。jsdom 測試走 fallback（undefined）抓不到，需專門用 null 測（見 `SettingsDialog.test.tsx`）。
 - 順手修：`.modal` 加 `max-height` + `overflow-y:auto`，避免設定內容過長時溢出/裁切。
 
+## 建置注意（安裝檔檔名）
+
+- `tauri.conf.json` 的 `productName` 為 `Token.Anxiety.Dashboard`，建置產物檔名與 GitHub Releases 一致（例：`Token.Anxiety.Dashboard_1.2.1_x64-setup.exe`）。視窗標題仍為「Token Anxiety Dashboard」。
+- `npm run release:assets` 可印出目前版本的 NSIS/MSI 路徑；上傳請用**新 tag**，勿對既有 release 使用 `gh release upload --clobber`。
+
 ## 建置注意
 
 - **Antigravity OAuth client 不硬編碼**：`ANTIGRAVITY_CLIENT_ID`/`ANTIGRAVITY_CLIENT_SECRET` 改由建置時環境變數經 `option_env!` 注入（GitHub push protection 會擋字面值、且符合「不可硬編碼 secrets」規則）。發佈前務必先 `$env:ANTIGRAVITY_CLIENT_ID=...; $env:ANTIGRAVITY_CLIENT_SECRET=...` 再 `npx tauri build`，否則 release 的 EXE 無法自動 refresh token。值為 Antigravity 公開 native-app client（可從 App 或 `lbjlaq/Antigravity-Manager` 取得）。

@@ -9,7 +9,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "release:assets": "pwsh -File scripts/print-release-assets.ps1"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
