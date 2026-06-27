@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDefaultState } from "../data/defaultState";
-import { deriveAccountStatus, formatDurationUntil, getWindowProgress, summarizeDashboard } from "./quota";
+import { deriveAccountStatus, formatDurationUntil, formatQuotaRowTitle, getWindowProgress, summarizeDashboard } from "./quota";
 
 describe("quota utilities", () => {
   it("computes window progress and remaining labels", () => {
@@ -47,6 +47,13 @@ describe("quota utilities", () => {
     // Less than a minute shows seconds
     expect(formatDurationUntil(new Date(45 * 1000).toISOString(), 0)).toBe("45秒");
     expect(formatDurationUntil(new Date(45 * 1000).toISOString(), 0, "en")).toBe("45s");
+  });
+
+  it("combines provider label with window kind for Antigravity rows", () => {
+    const antigravity = createDefaultState(0).accounts.find((account) => account.provider === "antigravity");
+    expect(antigravity).toBeDefined();
+    expect(formatQuotaRowTitle(antigravity!.windows[0], "zh-TW")).toBe("Claude · 五小時滾動");
+    expect(formatQuotaRowTitle(antigravity!.windows[1], "zh-TW")).toBe("Claude · 每週用量");
   });
 
   it("summarizes account counts and next reset", () => {

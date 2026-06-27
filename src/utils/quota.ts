@@ -115,6 +115,11 @@ export function summarizeDashboard(state: DashboardState, now = Date.now(), loca
   };
 }
 
+export function formatQuotaRowTitle(window: QuotaWindow, locale: LocaleId): string {
+  const kindLabel = formatWindowLabel(window, locale);
+  return window.label ? `${window.label} · ${kindLabel}` : kindLabel;
+}
+
 export function formatWindowLabel(window: QuotaWindow, locale: LocaleId): string {
   if (window.kind === "daily") {
     return t(locale, "dailyUsage");

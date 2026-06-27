@@ -4,7 +4,7 @@ import type { CSSProperties } from "react";
 import { providerMeta } from "../data/providers";
 import { t } from "../i18n";
 import type { LocaleId, ProviderEnvironment, UsageAccount } from "../types";
-import { deriveAccountStatus, formatWindowLabel, getWindowProgress } from "../utils/quota";
+import { deriveAccountStatus, formatQuotaRowTitle, getWindowProgress } from "../utils/quota";
 
 interface AccountCardProps {
   account: UsageAccount;
@@ -67,7 +67,7 @@ function AccountCardBody({
           return (
               <div className="quota-row" key={window.id}>
               <div className="quota-head">
-                <strong>{window.label || formatWindowLabel(window, locale)}</strong>
+                <strong>{formatQuotaRowTitle(window, locale)}</strong>
                 {progress.resetLabel && <span>{progress.resetLabel}</span>}
               </div>
               <div className="progress-track">

@@ -25,7 +25,7 @@ export const providerMeta: Record<
     label: "Antigravity",
     shortLabel: "Antigravity",
     accent: "#59c889",
-    description: "讀取 Antigravity 登入憑證，分別顯示 Claude 與 Gemini 共用額度。",
+    description: "讀取 Antigravity 登入憑證，分別顯示 Claude 與 Gemini 的 5 小時與每週用量。",
   },
   "opencode-go": {
     label: "OpenCode",

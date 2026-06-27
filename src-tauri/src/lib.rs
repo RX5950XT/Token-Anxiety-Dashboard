@@ -120,10 +120,33 @@ struct ClaudeExtraUsage {
     is_enabled: bool,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+struct AntigravityTier {
+    #[serde(rename = "isDefault")]
+    is_default: Option<bool>,
+    id: Option<String>,
+    name: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct AntigravityLoadResponse {
     #[serde(rename = "cloudaicompanionProject")]
     cloudaicompanion_project: Option<String>,
+    #[serde(rename = "paidTier")]
+    paid_tier: Option<AntigravityTier>,
+    #[serde(rename = "currentTier")]
+    current_tier: Option<AntigravityTier>,
+    #[serde(rename = "allowedTiers")]
+    allowed_tiers: Option<Vec<AntigravityTier>>,
+    #[serde(rename = "ineligibleTiers")]
+    ineligible_tiers: Option<Vec<AntigravityIneligibleTier>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AntigravityIneligibleTier {
+    #[allow(dead_code)]
+    #[serde(rename = "reasonCode")]
+    reason_code: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,6 +167,50 @@ struct AntigravityQuotaInfo {
     remaining_fraction: Option<f64>,
     #[serde(rename = "resetTime")]
     reset_time: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AntigravityQuotaSummaryResponse {
+    #[serde(default)]
+    groups: Vec<AntigravityQuotaSummaryGroup>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AntigravityQuotaSummaryGroup {
+    #[serde(rename = "displayName")]
+    display_name: Option<String>,
+    #[allow(dead_code)]
+    description: Option<String>,
+    #[serde(default)]
+    buckets: Vec<AntigravityQuotaSummaryBucket>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AntigravityQuotaSummaryBucket {
+    #[serde(rename = "bucketId")]
+    bucket_id: Option<String>,
+    window: Option<String>,
+    #[serde(rename = "remainingFraction")]
+    remaining_fraction: Option<f64>,
+    #[serde(rename = "resetTime")]
+    reset_time: Option<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum AntigravityFamily {
+    Claude,
+    Gemini,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum AntigravityWindowSlot {
+    FiveHour,
+    Weekly,
+}
+
+struct AntigravitySlotValue {
+    remaining: f64,
+    reset: String,
 }
 
 struct AntigravityCreds {
@@ -309,7 +376,90 @@ fn merge_account_state(new: UsageAccount, previous: Option<&UsageAccount>, now: 
         }
     }
 
+    if merged.provider == "antigravity" {
+        merge_antigravity_windows(&mut merged, prev);
+    }
+
     merged
+}
+
+/// Keep Antigravity Claude/Gemini bars visible when the API omits exhausted pools.
+fn merge_antigravity_windows(merged: &mut UsageAccount, prev: &UsageAccount) {
+    const EXPECTED: [(&str, &str, &str); 4] = [
+        ("antigravity-claude-5h", "Claude", "rolling-5h"),
+        ("antigravity-claude-weekly", "Claude", "weekly"),
+        ("antigravity-gemini-5h", "Gemini", "rolling-5h"),
+        ("antigravity-gemini-weekly", "Gemini", "weekly"),
+    ];
+
+    let mut restored = false;
+    for (id, label, kind) in EXPECTED {
+        if merged.windows.iter().any(|window| window.id == id) {
+            continue;
+        }
+
+        if let Some(prev_window) = find_antigravity_previous_window(prev, id) {
+            merged.windows.push(prev_window);
+            restored = true;
+            log_debug!("[DIAG] antigravity: preserved missing window {id}");
+            continue;
+        }
+
+        merged.windows.push(window(id, label, kind, 100.0, 100.0, ""));
+        restored = true;
+        log_debug!("[DIAG] antigravity: placeholder window {id} at 100% used");
+    }
+
+    sort_antigravity_windows(&mut merged.windows);
+
+    if restored && merged.accuracy == "official" {
+        merged.accuracy = "estimated".to_string();
+        if merged.notes == "已從 Google cloudcode-pa API（Antigravity）讀取真實額度。" {
+            merged.notes =
+                "部分額度視窗 API 未回傳，已保留上次資料或顯示為已用盡。".to_string();
+        }
+    }
+}
+
+fn find_antigravity_previous_window(prev: &UsageAccount, id: &str) -> Option<QuotaWindow> {
+    if let Some(prev_window) = prev.windows.iter().find(|window| window.id == id) {
+        return Some(prev_window.clone());
+    }
+
+    let legacy_id = match id {
+        "antigravity-claude-5h" => Some("antigravity-claude"),
+        "antigravity-gemini-5h" => Some("antigravity-gemini"),
+        _ => None,
+    }?;
+    let legacy = prev.windows.iter().find(|window| window.id == legacy_id)?;
+    let kind = if id.ends_with("-weekly") {
+        "weekly"
+    } else {
+        "rolling-5h"
+    };
+    Some(window(
+        id,
+        &legacy.label,
+        kind,
+        legacy.used,
+        legacy.limit,
+        &legacy.reset_at,
+    ))
+}
+
+fn sort_antigravity_windows(windows: &mut Vec<QuotaWindow>) {
+    let order = |id: &str| -> i32 {
+        match id {
+            "antigravity-claude-5h" => 0,
+            "antigravity-claude-weekly" => 1,
+            "antigravity-gemini-5h" => 2,
+            "antigravity-gemini-weekly" => 3,
+            "antigravity-claude" => 0,
+            "antigravity-gemini" => 2,
+            _ => 99,
+        }
+    };
+    windows.sort_by_key(|window| order(&window.id));
 }
 
 fn refresh_claude_account(
@@ -574,22 +724,24 @@ fn refresh_antigravity_account(context: ProviderContext, now: DateTime<Utc>) -> 
         }
     }
 
-    let project_id = fetch_antigravity_project_id(&token);
-    match fetch_antigravity_models(&token, project_id.as_deref()) {
-        Ok(models) => apply_antigravity_quota(&mut account, models),
-        Err(error) if error == "HTTP 401" => {
-            // Stored/refreshed token rejected: force one more refresh and retry the whole flow.
+    let (project_id, subscription_tier) = fetch_antigravity_code_assist(&token);
+    if let Err(error) = sync_antigravity_quota(
+        &mut account,
+        &token,
+        project_id.as_deref(),
+        subscription_tier.as_deref(),
+    ) {
+        if error == "HTTP 401" {
             log_debug!("[DIAG] antigravity: models 401, forcing refresh + retry");
             match refresh_antigravity_token(&creds.refresh_token) {
                 Ok(fresh) => {
-                    let pid = fetch_antigravity_project_id(&fresh);
-                    match fetch_antigravity_models(&fresh, pid.as_deref()) {
-                        Ok(models) => apply_antigravity_quota(&mut account, models),
-                        Err(e2) => {
-                            log_debug!("[DIAG] antigravity: retry FAILED: {e2}");
-                            account.status = "connected".to_string();
-                            account.notes = format!("Antigravity 額度 API 失敗：{e2}。");
-                        }
+                    let (pid, tier) = fetch_antigravity_code_assist(&fresh);
+                    if let Err(e2) =
+                        sync_antigravity_quota(&mut account, &fresh, pid.as_deref(), tier.as_deref())
+                    {
+                        log_debug!("[DIAG] antigravity: retry FAILED: {e2}");
+                        account.status = "connected".to_string();
+                        account.notes = format!("Antigravity 額度 API 失敗：{e2}。");
                     }
                 }
                 Err(e) => {
@@ -598,8 +750,7 @@ fn refresh_antigravity_account(context: ProviderContext, now: DateTime<Utc>) -> 
                     account.notes = "Antigravity token 更新失敗，請重新登入 Antigravity。".to_string();
                 }
             }
-        }
-        Err(error) => {
+        } else {
             log_debug!("[DIAG] antigravity: models FAILED: {error}");
             account.status = "connected".to_string();
             account.notes = format!("Antigravity 額度 API 失敗：{error}。");
@@ -609,64 +760,254 @@ fn refresh_antigravity_account(context: ProviderContext, now: DateTime<Utc>) -> 
     account
 }
 
-fn apply_antigravity_quota(account: &mut UsageAccount, resp: AntigravityModelsResponse) {
-    log_debug!("[DIAG] antigravity: API OK, {} models", resp.models.len());
-    account.status = "available".to_string();
-    account.accuracy = "official".to_string();
-    account.plan_name = "Antigravity".to_string();
-    account.notes = "已從 Google cloudcode-pa API（Antigravity）讀取真實額度。".to_string();
+fn sync_antigravity_quota(
+    account: &mut UsageAccount,
+    token: &str,
+    project_id: Option<&str>,
+    subscription_tier: Option<&str>,
+) -> Result<(), String> {
+    let summary = fetch_antigravity_quota_summary(token, project_id);
+    let models = fetch_antigravity_models(token, project_id)?;
+    apply_antigravity_quota(account, models, summary, subscription_tier);
+    Ok(())
+}
 
-    // Antigravity exposes per-model quota, but Claude models share one pool and
-    // Gemini models share another. Aggregate each family into a single window,
-    // taking the minimum remainingFraction (= highest usage) to be safe.
+/// Align with Antigravity-Manager: group displayName is authoritative; bucketId is fallback.
+fn antigravity_family_for_group(group_name: &str, bucket_id: &str) -> Option<AntigravityFamily> {
+    let group = group_name.to_lowercase();
+    if group.contains("gemini") {
+        return Some(AntigravityFamily::Gemini);
+    }
+    if group.contains("claude") || group.contains("gpt") || group.contains("third") {
+        return Some(AntigravityFamily::Claude);
+    }
+
+    let bucket = bucket_id.to_lowercase();
+    if bucket.contains("gemini") {
+        return Some(AntigravityFamily::Gemini);
+    }
+    if bucket.contains("claude") || bucket.contains("3p") {
+        return Some(AntigravityFamily::Claude);
+    }
+    None
+}
+
+fn antigravity_window_slot(window: &str) -> Option<AntigravityWindowSlot> {
+    match window.trim().to_lowercase().as_str() {
+        "5h" => Some(AntigravityWindowSlot::FiveHour),
+        "weekly" => Some(AntigravityWindowSlot::Weekly),
+        _ => None,
+    }
+}
+
+fn upsert_antigravity_slot(
+    slots: &mut std::collections::HashMap<(AntigravityFamily, AntigravityWindowSlot), AntigravitySlotValue>,
+    family: AntigravityFamily,
+    slot: AntigravityWindowSlot,
+    remaining: f64,
+    reset: String,
+) {
+    let remaining = remaining.clamp(0.0, 1.0);
+    match slots.get_mut(&(family, slot)) {
+        Some(entry) if remaining < entry.remaining => {
+            entry.remaining = remaining;
+            if !reset.is_empty() {
+                entry.reset = reset;
+            }
+        }
+        Some(_) => {}
+        None => {
+            slots.insert(
+                (family, slot),
+                AntigravitySlotValue {
+                    remaining,
+                    reset,
+                },
+            );
+        }
+    }
+}
+
+fn populate_antigravity_slots_from_summary(
+    slots: &mut std::collections::HashMap<(AntigravityFamily, AntigravityWindowSlot), AntigravitySlotValue>,
+    summary: &AntigravityQuotaSummaryResponse,
+) {
+    for group in &summary.groups {
+        let group_name = group.display_name.clone().unwrap_or_default();
+        for bucket in &group.buckets {
+            let bucket_id = bucket.bucket_id.clone().unwrap_or_default();
+            let Some(family) = antigravity_family_for_group(&group_name, &bucket_id) else {
+                log_debug!(
+                    "[DIAG] antigravity: skip unknown quota group={group_name} bucket={bucket_id}"
+                );
+                continue;
+            };
+            let window_name = bucket.window.clone().unwrap_or_default();
+            let Some(slot) = antigravity_window_slot(&window_name) else {
+                continue;
+            };
+            let remaining = bucket.remaining_fraction.unwrap_or(0.0);
+            let reset = bucket.reset_time.clone().unwrap_or_default();
+            upsert_antigravity_slot(slots, family, slot, remaining, reset);
+        }
+    }
+}
+
+fn populate_antigravity_5h_from_models_if_missing(
+    slots: &mut std::collections::HashMap<(AntigravityFamily, AntigravityWindowSlot), AntigravitySlotValue>,
+    resp: &AntigravityModelsResponse,
+) {
     let mut claude: Option<(f64, String)> = None;
     let mut gemini: Option<(f64, String)> = None;
 
     for (name, info) in &resp.models {
-        let Some(qi) = &info.quota_info else { continue };
-        let Some(remaining) = qi.remaining_fraction else { continue };
-        let remaining = remaining.clamp(0.0, 1.0);
-        let reset = qi.reset_time.clone().unwrap_or_default();
-
         let bucket = if name.starts_with("claude") {
             &mut claude
         } else if name.starts_with("gemini") {
             &mut gemini
         } else {
-            continue; // ignore gpt/image/chat/tab internal models
+            continue;
+        };
+
+        let (remaining, reset) = match &info.quota_info {
+            Some(qi) => {
+                let remaining = qi.remaining_fraction.unwrap_or(0.0).clamp(0.0, 1.0);
+                let reset = qi.reset_time.clone().unwrap_or_default();
+                (remaining, reset)
+            }
+            None => (0.0, String::new()),
         };
 
         match bucket {
             Some(entry) if remaining < entry.0 => {
                 entry.0 = remaining;
-                entry.1 = reset;
+                if !reset.is_empty() {
+                    entry.1 = reset;
+                }
             }
             Some(_) => {}
             None => *bucket = Some((remaining, reset)),
         }
     }
 
-    // Fixed order: Claude first, then Gemini.
-    if let Some((remaining, reset)) = claude {
-        let used = (1.0 - remaining) * 100.0;
+    if !slots.contains_key(&(AntigravityFamily::Claude, AntigravityWindowSlot::FiveHour)) {
+        if let Some((remaining, reset)) = claude {
+            upsert_antigravity_slot(
+                slots,
+                AntigravityFamily::Claude,
+                AntigravityWindowSlot::FiveHour,
+                remaining,
+                reset,
+            );
+        }
+    }
+
+    if !slots.contains_key(&(AntigravityFamily::Gemini, AntigravityWindowSlot::FiveHour)) {
+        if let Some((remaining, reset)) = gemini {
+            upsert_antigravity_slot(
+                slots,
+                AntigravityFamily::Gemini,
+                AntigravityWindowSlot::FiveHour,
+                remaining,
+                reset,
+            );
+        }
+    }
+}
+
+fn push_antigravity_windows(
+    account: &mut UsageAccount,
+    slots: &std::collections::HashMap<(AntigravityFamily, AntigravityWindowSlot), AntigravitySlotValue>,
+) {
+    const ORDER: [(AntigravityFamily, AntigravityWindowSlot, &str, &str, &str); 4] = [
+        (
+            AntigravityFamily::Claude,
+            AntigravityWindowSlot::FiveHour,
+            "antigravity-claude-5h",
+            "Claude",
+            "rolling-5h",
+        ),
+        (
+            AntigravityFamily::Claude,
+            AntigravityWindowSlot::Weekly,
+            "antigravity-claude-weekly",
+            "Claude",
+            "weekly",
+        ),
+        (
+            AntigravityFamily::Gemini,
+            AntigravityWindowSlot::FiveHour,
+            "antigravity-gemini-5h",
+            "Gemini",
+            "rolling-5h",
+        ),
+        (
+            AntigravityFamily::Gemini,
+            AntigravityWindowSlot::Weekly,
+            "antigravity-gemini-weekly",
+            "Gemini",
+            "weekly",
+        ),
+    ];
+
+    for (family, slot, id, label, kind) in ORDER {
+        let Some(value) = slots.get(&(family, slot)) else {
+            continue;
+        };
+        let used = (1.0 - value.remaining) * 100.0;
+        let family_name = match family {
+            AntigravityFamily::Claude => "Claude",
+            AntigravityFamily::Gemini => "Gemini",
+        };
+        let window_name = match slot {
+            AntigravityWindowSlot::FiveHour => "5h",
+            AntigravityWindowSlot::Weekly => "weekly",
+        };
         log_debug!(
-            "[DIAG] antigravity: aggregated Claude used={:.1}% remaining={:.2} reset={}",
-            used, remaining, reset
+            "[DIAG] antigravity: {family_name} {window_name} used={used:.1}% remaining={:.2} reset={}",
+            value.remaining,
+            value.reset
         );
         account
             .windows
-            .push(window("antigravity-claude", "Claude", "daily", used, 100.0, &reset));
+            .push(window(id, label, kind, used, 100.0, &value.reset));
     }
-    if let Some((remaining, reset)) = gemini {
-        let used = (1.0 - remaining) * 100.0;
-        log_debug!(
-            "[DIAG] antigravity: aggregated Gemini used={:.1}% remaining={:.2} reset={}",
-            used, remaining, reset
-        );
-        account
-            .windows
-            .push(window("antigravity-gemini", "Gemini", "daily", used, 100.0, &reset));
+}
+
+fn apply_antigravity_quota(
+    account: &mut UsageAccount,
+    resp: AntigravityModelsResponse,
+    summary: Option<AntigravityQuotaSummaryResponse>,
+    subscription_tier: Option<&str>,
+) {
+    log_debug!(
+        "[DIAG] antigravity: models OK ({}), summary groups={}",
+        resp.models.len(),
+        summary
+            .as_ref()
+            .map(|value| value.groups.len())
+            .unwrap_or(0)
+    );
+    account.status = "available".to_string();
+    account.accuracy = "official".to_string();
+    account.plan_name = subscription_tier
+        .filter(|tier| !tier.is_empty())
+        .map(|tier| format!("Antigravity {tier}"))
+        .unwrap_or_else(|| "Antigravity".to_string());
+    account.notes = "已從 Google cloudcode-pa API（Antigravity）讀取真實額度。".to_string();
+    account.windows.clear();
+
+    let mut slots: std::collections::HashMap<
+        (AntigravityFamily, AntigravityWindowSlot),
+        AntigravitySlotValue,
+    > = std::collections::HashMap::new();
+
+    if let Some(summary) = summary {
+        populate_antigravity_slots_from_summary(&mut slots, &summary);
     }
+    populate_antigravity_5h_from_models_if_missing(&mut slots, &resp);
+    push_antigravity_windows(account, &slots);
+    sort_antigravity_windows(&mut account.windows);
 
     if account.windows.is_empty() {
         account.notes = "Antigravity 已連線，但未取得 Claude/Gemini 額度資料。".to_string();
@@ -1297,7 +1638,41 @@ fn refresh_antigravity_token(refresh_token: &str) -> Result<String, String> {
     }
 }
 
-fn fetch_antigravity_project_id(token: &str) -> Option<String> {
+fn extract_antigravity_subscription_tier(data: &AntigravityLoadResponse) -> Option<String> {
+    let mut tier = data
+        .paid_tier
+        .as_ref()
+        .and_then(|value| value.name.clone().or_else(|| value.id.clone()));
+
+    let ineligible = data
+        .ineligible_tiers
+        .as_ref()
+        .is_some_and(|values| !values.is_empty());
+
+    if tier.is_none() && !ineligible {
+        tier = data
+            .current_tier
+            .as_ref()
+            .and_then(|value| value.name.clone().or_else(|| value.id.clone()));
+    }
+
+    if tier.is_none() {
+        if let Some(mut allowed) = data.allowed_tiers.clone() {
+            if let Some(default_tier) = allowed.iter_mut().find(|value| value.is_default == Some(true))
+            {
+                tier = default_tier
+                    .name
+                    .clone()
+                    .or_else(|| default_tier.id.clone())
+                    .map(|value| format!("{value} (Restricted)"));
+            }
+        }
+    }
+
+    tier
+}
+
+fn fetch_antigravity_code_assist(token: &str) -> (Option<String>, Option<String>) {
     for base in ANTIGRAVITY_BASES {
         let url = format!("{base}/v1internal:loadCodeAssist");
         match ureq::post(&url)
@@ -1315,11 +1690,13 @@ fn fetch_antigravity_project_id(token: &str) -> Option<String> {
                         .as_ref()
                         .and_then(|s| s.split('/').last())
                         .map(String::from);
+                    let subscription_tier = extract_antigravity_subscription_tier(&data);
                     log_debug!(
-                        "[DIAG] antigravity: loadCodeAssist OK via {base}, project={:?}",
-                        project_id
+                        "[DIAG] antigravity: loadCodeAssist OK via {base}, project={:?}, tier={:?}",
+                        project_id,
+                        subscription_tier
                     );
-                    return project_id;
+                    return (project_id, subscription_tier);
                 }
             }
             Err(ureq::Error::Status(code, _)) => {
@@ -1330,7 +1707,7 @@ fn fetch_antigravity_project_id(token: &str) -> Option<String> {
             }
         }
     }
-    None
+    (None, None)
 }
 
 fn fetch_antigravity_models(
@@ -1373,6 +1750,72 @@ fn fetch_antigravity_models(
         }
     }
     Err(last_error)
+}
+
+/// Best-effort grouped quota (5h + weekly per model family). Failure must not block sync.
+fn fetch_antigravity_quota_summary(
+    token: &str,
+    project_id: Option<&str>,
+) -> Option<AntigravityQuotaSummaryResponse> {
+    let mut last_error = String::new();
+    for base in ANTIGRAVITY_BASES {
+        let url = format!("{base}/v1internal:retrieveUserQuotaSummary");
+        let bodies: Vec<Value> = match project_id {
+            Some(pid) => vec![ureq::json!({ "project": pid }), ureq::json!({})],
+            None => vec![ureq::json!({})],
+        };
+        for body in bodies {
+            match ureq::post(&url)
+                .set("Authorization", &format!("Bearer {token}"))
+                .set("Content-Type", "application/json")
+                .set("Accept", "application/json")
+                .set("User-Agent", ANTIGRAVITY_USER_AGENT)
+                .timeout(std::time::Duration::from_secs(15))
+                .send_json(body)
+            {
+                Ok(response) => {
+                    match response.into_json::<AntigravityQuotaSummaryResponse>() {
+                        Ok(summary) => {
+                            log_debug!(
+                                "[DIAG] antigravity: quotaSummary OK via {base}, groups={}",
+                                summary.groups.len()
+                            );
+                            return Some(summary);
+                        }
+                        Err(error) => {
+                            log_debug!(
+                                "[DIAG] antigravity: quotaSummary parse failed via {base}: {error}"
+                            );
+                            return None;
+                        }
+                    }
+                }
+                Err(ureq::Error::Status(code, _)) => {
+                    last_error = format!("HTTP {code}");
+                    if code == 401 {
+                        log_debug!("[DIAG] antigravity: quotaSummary {base} HTTP 401");
+                        return None;
+                    }
+                    // Match Antigravity-Manager: 429/5xx fall through endpoints; other 4xx stop.
+                    if (400..500).contains(&code) && code != 403 && code != 429 {
+                        log_debug!("[DIAG] antigravity: quotaSummary {base} HTTP {code} (no retry)");
+                        return None;
+                    }
+                    if code != 403 {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    last_error = error.to_string();
+                    break;
+                }
+            }
+        }
+    }
+    if !last_error.is_empty() {
+        log_debug!("[DIAG] antigravity: quotaSummary unavailable: {last_error}");
+    }
+    None
 }
 
 fn title_case(value: &str) -> String {
@@ -1521,7 +1964,47 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_antigravity_quota_two_pools_min_remaining() {
+    fn test_apply_antigravity_quota_summary_four_windows() {
+        let summary_json = r#"{
+            "groups": [
+                {
+                    "displayName": "Claude and GPT models",
+                    "buckets": [
+                        {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 0.6, "resetTime": "2026-05-24T08:54:55Z"},
+                        {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 0.75, "resetTime": "2026-05-27T00:00:00Z"}
+                    ]
+                },
+                {
+                    "displayName": "Gemini Models",
+                    "buckets": [
+                        {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 0.4, "resetTime": "2026-05-24T09:00:00Z"},
+                        {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 0.9, "resetTime": "2026-05-30T00:00:00Z"}
+                    ]
+                }
+            ]
+        }"#;
+        let summary: AntigravityQuotaSummaryResponse = serde_json::from_str(summary_json).unwrap();
+        let models: AntigravityModelsResponse = serde_json::from_str(r#"{"models": {}}"#).unwrap();
+        let mut account =
+            base_account("antigravity-default", "antigravity", "Antigravity", "Antigravity", 2, Utc::now());
+        apply_antigravity_quota(&mut account, models, Some(summary), Some("Pro"));
+
+        assert_eq!(account.windows.len(), 4);
+        assert_eq!(account.windows[0].id, "antigravity-claude-5h");
+        assert_eq!(account.windows[0].kind, "rolling-5h");
+        assert!((account.windows[0].used - 40.0).abs() < 0.001);
+        assert_eq!(account.windows[1].id, "antigravity-claude-weekly");
+        assert_eq!(account.windows[1].kind, "weekly");
+        assert!((account.windows[1].used - 25.0).abs() < 0.001);
+        assert_eq!(account.windows[2].id, "antigravity-gemini-5h");
+        assert!((account.windows[2].used - 60.0).abs() < 0.001);
+        assert_eq!(account.windows[3].id, "antigravity-gemini-weekly");
+        assert!((account.windows[3].used - 10.0).abs() < 0.001);
+        assert_eq!(account.plan_name, "Antigravity Pro");
+    }
+
+    #[test]
+    fn test_apply_antigravity_quota_models_fallback_for_5h() {
         let json = r#"{
             "models": {
                 "claude-sonnet-4-6": {"quotaInfo": {"remainingFraction": 0.8, "resetTime": "2026-05-24T08:54:55Z"}},
@@ -1532,17 +2015,88 @@ mod tests {
             }
         }"#;
         let resp: AntigravityModelsResponse = serde_json::from_str(json).unwrap();
-        let mut account = base_account("antigravity-default", "antigravity", "Antigravity", "Antigravity", 2, Utc::now());
-        apply_antigravity_quota(&mut account, resp);
+        let mut account =
+            base_account("antigravity-default", "antigravity", "Antigravity", "Antigravity", 2, Utc::now());
+        apply_antigravity_quota(&mut account, resp, None, None);
 
-        assert_eq!(account.status, "available");
-        assert_eq!(account.windows.len(), 2); // gpt ignored
-        // Claude first (min remaining 0.4 → used 60%), then Gemini (min 0.6 → used 40%).
-        assert_eq!(account.windows[0].id, "antigravity-claude");
-        assert_eq!(account.windows[0].label, "Claude");
+        assert_eq!(account.windows.len(), 2);
+        assert_eq!(account.windows[0].id, "antigravity-claude-5h");
+        assert_eq!(account.windows[0].kind, "rolling-5h");
         assert!((account.windows[0].used - 60.0).abs() < 0.001);
-        assert_eq!(account.windows[1].id, "antigravity-gemini");
-        assert_eq!(account.windows[1].label, "Gemini");
+        assert_eq!(account.windows[1].id, "antigravity-gemini-5h");
         assert!((account.windows[1].used - 40.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_apply_antigravity_quota_exhausted_pools_stay_visible() {
+        let json = r#"{
+            "models": {
+                "claude-sonnet-4-6": {"quotaInfo": {"remainingFraction": 0, "resetTime": "2026-05-24T08:54:55Z"}},
+                "claude-opus-4-6-thinking": {"quotaInfo": {"resetTime": "2026-05-24T09:00:00Z"}},
+                "gemini-2.5-pro": {},
+                "gemini-3-flash": {"quotaInfo": {"remainingFraction": 0.0, "resetTime": "2026-05-24T10:00:00Z"}}
+            }
+        }"#;
+        let resp: AntigravityModelsResponse = serde_json::from_str(json).unwrap();
+        let mut account =
+            base_account("antigravity-default", "antigravity", "Antigravity", "Antigravity", 2, Utc::now());
+        apply_antigravity_quota(&mut account, resp, None, None);
+
+        assert_eq!(account.windows.len(), 2);
+        assert_eq!(account.windows[0].id, "antigravity-claude-5h");
+        assert!((account.windows[0].used - 100.0).abs() < 0.001);
+        assert_eq!(account.windows[1].id, "antigravity-gemini-5h");
+        assert!((account.windows[1].used - 100.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_apply_antigravity_quota_uses_subscription_tier() {
+        let models: AntigravityModelsResponse = serde_json::from_str(r#"{"models": {}}"#).unwrap();
+        let mut account =
+            base_account("antigravity-default", "antigravity", "Antigravity", "Antigravity", 2, Utc::now());
+        apply_antigravity_quota(&mut account, models, None, Some("Google AI Pro"));
+        assert_eq!(account.plan_name, "Antigravity Google AI Pro");
+    }
+
+    #[test]
+    fn test_merge_antigravity_windows_preserves_missing_pool() {
+        let prev = UsageAccount {
+            id: "antigravity-default".to_string(),
+            provider: "antigravity".to_string(),
+            account_name: "Antigravity".to_string(),
+            plan_name: "Antigravity".to_string(),
+            status: "available".to_string(),
+            accuracy: "official".to_string(),
+            last_updated: Utc::now().to_rfc3339(),
+            windows: vec![
+                window("antigravity-claude-5h", "Claude", "rolling-5h", 100.0, 100.0, "2026-05-24T08:54:55Z"),
+                window("antigravity-claude-weekly", "Claude", "weekly", 80.0, 100.0, "2026-05-27T00:00:00Z"),
+                window("antigravity-gemini-5h", "Gemini", "rolling-5h", 40.0, 100.0, "2026-05-24T09:00:00Z"),
+                window("antigravity-gemini-weekly", "Gemini", "weekly", 20.0, 100.0, "2026-05-30T00:00:00Z"),
+            ],
+            notes: "prev".to_string(),
+            order: 2,
+        };
+
+        let mut next = prev.clone();
+        next.windows = vec![window(
+            "antigravity-gemini-5h",
+            "Gemini",
+            "rolling-5h",
+            40.0,
+            100.0,
+            "2026-05-24T09:00:00Z",
+        )];
+        next.accuracy = "official".to_string();
+        next.notes = "已從 Google cloudcode-pa API（Antigravity）讀取真實額度。".to_string();
+
+        merge_antigravity_windows(&mut next, &prev);
+
+        assert_eq!(next.windows.len(), 4);
+        assert_eq!(next.windows[0].id, "antigravity-claude-5h");
+        assert!((next.windows[0].used - 100.0).abs() < 0.001);
+        assert_eq!(next.windows[1].id, "antigravity-claude-weekly");
+        assert_eq!(next.windows[2].id, "antigravity-gemini-5h");
+        assert_eq!(next.accuracy, "estimated");
     }
 }

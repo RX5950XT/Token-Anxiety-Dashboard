@@ -49,17 +49,33 @@ Tauri 2 桌面額度儀表板，手動同步顯示 Claude Code / Codex / Antigra
 
 - **Antigravity OAuth client 不硬編碼**：`ANTIGRAVITY_CLIENT_ID`/`ANTIGRAVITY_CLIENT_SECRET` 改由建置時環境變數經 `option_env!` 注入（GitHub push protection 會擋字面值、且符合「不可硬編碼 secrets」規則）。發佈前務必先 `$env:ANTIGRAVITY_CLIENT_ID=...; $env:ANTIGRAVITY_CLIENT_SECRET=...` 再 `npx tauri build`，否則 release 的 EXE 無法自動 refresh token。值為 Antigravity 公開 native-app client（可從 App 或 `lbjlaq/Antigravity-Manager` 取得）。
 
+## 最近一次任務（Antigravity 5h + 每週雙視窗）
+
+- **參考**：[lbjlaq/Antigravity-Manager](https://github.com/lbjlaq/Antigravity-Manager) v4.2.8 `modules/quota.rs`（PR #3185 `retrieveUserQuotaSummary`）。
+- 新增 `retrieveUserQuotaSummary` API（best-effort），解析 `groups[].buckets[]` 的 `5h` / `weekly` 視窗；bucketId 如 `gemini-5h`/`3p-weekly`。
+- Antigravity 卡片改為 4 條 bar：Claude 5h → Claude 每週 → Gemini 5h → Gemini 每週（與 Claude Code / Codex 同 kind）。
+- `fetchAvailableModels` 仍作 5h 後備；`loadCodeAssist` 解析 `paidTier`/`currentTier` 顯示方案名。
+- `merge_antigravity_windows` 支援舊 ID 遷移；UI `formatQuotaRowTitle` 顯示「Claude · 五小時滾動」。
+
+## 已修 Bug（Antigravity 額度滿時進度條消失）
+
+- **現象**：Claude/Gemini bar 在 100% 用盡後同步會消失，再同步才出現。
+- **根因**：`apply_antigravity_quota` 對缺少 `remainingFraction` 或整個 `quotaInfo` 的模型 `continue` 跳過；API 在額度用盡時常省略這些欄位。
+- **修復**：缺欄位視為 `remaining=0`（100% used）；`merge_antigravity_windows` 在同步後若少了一條 bar，從上次狀態補回（固定 Claude → Gemini 順序）。
+- **測試**：`test_apply_antigravity_quota_exhausted_pools_stay_visible`、`test_merge_antigravity_windows_preserves_missing_pool`。
+
 ## 待辦／未驗證
 
 - 「顯示項目」勾選的即時顯示/隱藏與重啟持久化，建議實機再點一次確認（後端已回傳 `visibleProviders`）。
 - 非 Windows 平台的 Antigravity 憑證讀取尚未實作。
+- Antigravity 額度滿時 bar 持久顯示：建議實機同步確認。
 
 ## 驗證指令
 
 ```powershell
-npm test            # 前端 9 passed
+npm test            # 前端 11 passed
 npm run build       # tsc + vite OK
-cd src-tauri; cargo test   # 6 passed
+cd src-tauri; cargo test   # 10 passed（含 summary 四視窗、exhausted、merge、tier）
 cargo check
-npx tauri build     # 產出 EXE（尚未實機跑過）
+npx tauri build     # 產出 EXE（需先設 ANTIGRAVITY_CLIENT_ID/SECRET）
 ```
