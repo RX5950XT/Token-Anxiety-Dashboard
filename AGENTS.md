@@ -11,15 +11,23 @@
 - 前端使用 React + TypeScript + Vite。
 - 本地狀態由 Rust command 寫入 SQLite，避免只依賴瀏覽器 storage。
 - Provider adapter 必須明確標示資料可信度：`official`、`local`、`estimated`、`manual`。
+- **手動同步**：右上角「同步」觸發，無背景自動輪詢。
+- **F12 DevTools**：同步後 Console 輸出 `[Backend Diagnostics]` 後端日誌。
 - 四個 Provider 皆已接上真實本機額度資料：Claude Code（Anthropic OAuth API）、Codex（ChatGPT API）、Antigravity（Windows 憑證管理員 → Google cloudcode-pa API）、OpenCode（本地 SQLite db）。
-- 設定頁的「顯示項目」可勾選要顯示哪些 provider，儲存於 `AppSettings.visibleProviders`（`undefined` = 全部顯示）。
+- 設定頁「顯示項目」可勾選要顯示哪些 provider，存於 `AppSettings.visibleProviders`（`undefined`/`null` = 全部顯示）；前端用 `== null` 判斷（Rust `None` 序列化為 JSON `null`）。
 
 ## Provider 邊界
 
-- Claude Code：已支援 `claude auth status --json` 與 Anthropic OAuth API。API 失敗時 `merge_account_state` 會保留舊視窗長達 6 小時，避免閃爍。
-- Codex：已支援 `codex login status` 與 ChatGPT `/backend-api/wham/usage` API。
-- Antigravity（取代已淘汰的 Gemini CLI）：從 Windows 憑證管理員 `gemini:antigravity` 讀取登入 token，access_token 過期時用內建 OAuth client refresh。兩步調用 Google `cloudcode-pa`（`loadCodeAssist` 帶 `ideType=ANTIGRAVITY` 取 project ID → `fetchAvailableModels` 取各模型額度）。`claude-*` 聚合為 Claude 一條、`gemini-*` 聚合為 Gemini 一條，各取最低 `remainingFraction`，於同一張卡片顯示兩條 bar。憑證讀取目前僅 Windows。
-- OpenCode：UI 名稱使用 OpenCode；官方方案名稱為 OpenCode Go。從本機 `opencode.db` 彙總真實 cost 視窗。`$.cost` 為增量值，`SUM(cost)` 即為正確總用量。5h rolling reset = `max(time_created) + 5h`；weekly/monthly reset 由用戶在設定頁面手動指定。
+- Claude Code：Anthropic OAuth API。API 失敗時 `merge_account_state` 保留舊視窗最多 6 小時，避免閃爍。
+- Codex：ChatGPT `/backend-api/wham/usage` API。
+- Antigravity（取代 Gemini CLI）：Windows 憑證管理員 `gemini:antigravity` 讀 token；過期時以建置時注入的 OAuth client refresh（不寫回憑證管理員）。`loadCodeAssist`（`ideType=ANTIGRAVITY`）取 project + 方案名 → `retrieveUserQuotaSummary` 取 Claude/Gemini 的 **5h + weekly** 四條視窗（best-effort）→ `fetchAvailableModels` 作 5h 後備。額度用盡時缺 `remainingFraction` 視為 100% used；`merge_antigravity_windows` 補回消失的 bar。憑證讀取僅 Windows。
+- OpenCode：本機 `opencode.db`；`$.cost` 為增量值，`SUM(cost)` 為窗口總用量；5h reset = `max(time_created) + 5h`；weekly/monthly reset 由設定頁手動指定。
+
+## 發佈與建置
+
+- 目前版本 **v1.2.1**；安裝檔檔名與 GitHub 一致：`Token.Anxiety.Dashboard_<version>_x64-setup.exe`（`productName` = `Token.Anxiety.Dashboard`）。
+- `npm run release:assets` 印出 NSIS/MSI 路徑；發佈請**新 tag 新 release**，勿 `gh release upload --clobber` 覆蓋舊版。
+- 建置前設 `ANTIGRAVITY_CLIENT_ID`/`ANTIGRAVITY_CLIENT_SECRET` 環境變數（見 README）。
 
 ## 品質要求
 
@@ -35,25 +43,7 @@
 npm test
 npm run build
 cd src-tauri
+cargo test
 cargo check
+npm run release:assets   # 可選：印出安裝檔路徑
 ```
-
-
-
-<claude-mem-context>
-# Memory Context
-
-# [Token-Anxiety-Dashboard] recent context, 2026-05-15 2:29am GMT+8
-
-Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
-Format: ID TIME TYPE TITLE
-Fetch details: get_observations([IDs]) | Search: mem-search skill
-
-Stats: 2 obs (962t read) | 19,964t work | 95% savings
-
-### May 15, 2026
-1016 2:27a 🔵 Token-Anxiety-Dashboard API Call Patterns — On-Demand, Not Polled
-1017 2:28a 🔵 Dashboard API Sync Triggered Only at Startup and Manual Button Click
-
-Access 20k tokens of past work via get_observations([IDs]) or mem-search skill.
-</claude-mem-context>

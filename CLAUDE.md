@@ -21,7 +21,7 @@
 |----------|---------|---------|------|
 | Claude Code | `~/.claude/.credentials.json` → Anthropic OAuth API | 5h rolling、7d weekly | 失敗時保留舊視窗最多 6 小時 |
 | Codex | `~/.codex/auth.json` → ChatGPT `/backend-api/wham/usage` | 5h rolling、weekly | 使用 ChatGPT access_token |
-| Antigravity | Windows 憑證管理員 `gemini:antigravity` → Google cloudcode-pa API | Claude、Gemini 各一條共用額度 | 兩步調用（loadCodeAssist `ideType=ANTIGRAVITY` → fetchAvailableModels）；`claude-*`/`gemini-*` 各聚合取最低 remainingFraction；token 過期以內建 client refresh |
+| Antigravity | Windows 憑證管理員 `gemini:antigravity` → Google cloudcode-pa API | Claude/Gemini 各 **5h + weekly** 共 4 條 bar | `loadCodeAssist` → `retrieveUserQuotaSummary`（主）+ `fetchAvailableModels`（5h 後備）；額度滿時 bar 不消失；token 過期以建置時注入 OAuth client refresh |
 | OpenCode | `~/.local/share/opencode/opencode.db` | 5h rolling、7d、30d cost | 5h: `reset` = `max(time_created) + width`；weekly/monthly: **用戶手動設定重置時間** |
 
 - Windows 外部 CLI 呼叫帶 `CREATE_NO_WINDOW`，不彈出終端機視窗。
@@ -44,7 +44,15 @@ cd src-tauri
 cargo test
 cargo check
 npx tauri build
+npm run release:assets   # 印出與 GitHub 對齊的安裝檔路徑
 ```
+
+## 發佈與安裝檔檔名
+
+- `tauri.conf.json`：`productName` = `Token.Anxiety.Dashboard`（建置產物檔名），`app.windows.title` = `Token Anxiety Dashboard`（視窗標題）。
+- 產物：`Token.Anxiety.Dashboard_<version>_x64-setup.exe`、`Token.Anxiety.Dashboard_<version>_x64_en-US.msi`。
+- GitHub Releases：**新 tag 新 release**；勿對既有 release 使用 `gh release upload --clobber`。
+- 目前最新功能版：**v1.2.1**（Antigravity 四視窗）；v1.2.0 為初版 Antigravity（兩條 bar）。
 
 ---
 
@@ -91,25 +99,27 @@ npx tauri build
 
 ### 二、Antigravity 的 Quota API（取代已淘汰的 Gemini CLI）
 
-**檔案位置**：`src-tauri/src/lib.rs` → `read_antigravity_credentials`、`refresh_antigravity_token`、`fetch_antigravity_project_id`、`fetch_antigravity_models`、`apply_antigravity_quota`、`refresh_antigravity_account`
+**檔案位置**：`src-tauri/src/lib.rs` → `read_antigravity_credentials`、`refresh_antigravity_token`、`fetch_antigravity_code_assist`、`fetch_antigravity_quota_summary`、`fetch_antigravity_models`、`apply_antigravity_quota`、`merge_antigravity_windows`、`refresh_antigravity_account`
+
+**參考**：[lbjlaq/Antigravity-Manager](https://github.com/lbjlaq/Antigravity-Manager) v4.2.8 `modules/quota.rs`（`retrieveUserQuotaSummary`）。
 
 **本機憑證來源**：Antigravity 4.x 把登入 token 寫進 **Windows 憑證管理員**，target `gemini:antigravity`（type GENERIC），blob 為 UTF-8 JSON：`{ "token": { "access_token", "refresh_token", "expiry"(RFC3339) }, "auth_method" }`。用 Win32 FFI `CredReadW`/`CredFree` 讀取（僅 Windows）。
 
-**Token 更新**：解析 `expiry`，過期/接近過期（skew 15 分）/無法解析時，用 Antigravity 內建 OAuth client（`oauth2.googleapis.com/token`，grant_type=refresh_token）refresh，只在記憶體用新 token，**不寫回憑證管理員**。models 回 401 時再強制 refresh 重試一次。client_id/secret **不硬編碼**，改由建置時環境變數 `ANTIGRAVITY_CLIENT_ID`/`ANTIGRAVITY_CLIENT_SECRET` 經 `option_env!` 注入（見 README「發佈建置」）；未設定則略過 refresh。
+**Token 更新**：解析 `expiry`，過期/接近過期（skew 15 分）/無法解析時 refresh；只在記憶體用新 token，**不寫回憑證管理員**。401 時強制 refresh 重試。client_id/secret 由建置時環境變數 `ANTIGRAVITY_CLIENT_ID`/`ANTIGRAVITY_CLIENT_SECRET` 經 `option_env!` 注入。
 
 **API 調用流程**：
-1. `POST {base}/v1internal:loadCodeAssist`，body `{"metadata":{"ideType":"ANTIGRAVITY"}}` → 取 `cloudaicompanionProject`
-2. `POST {base}/v1internal:fetchAvailableModels`，body `{"project": pid}`（403 則去掉 project 重試）
-- base fallback：`daily-cloudcode-pa.sandbox` → `daily-cloudcode-pa` → `cloudcode-pa`
-- Header：Bearer token + `User-Agent: vscode/1.X.X (Antigravity/4.2.1)`
+1. `POST {base}/v1internal:loadCodeAssist`，body `{"metadata":{"ideType":"ANTIGRAVITY"}}` → `cloudaicompanionProject` + `paidTier`/`currentTier` 方案名
+2. `POST {base}/v1internal:retrieveUserQuotaSummary`（best-effort）→ 解析 `groups[].buckets[]` 的 `5h` / `weekly`（bucketId 如 `gemini-5h`、`3p-weekly`）；依 group `displayName` 分 Claude / Gemini
+3. `POST {base}/v1internal:fetchAvailableModels` → summary 缺 5h 時後備；`claude-*`/`gemini-*` 各聚合最低 `remainingFraction`
+- base fallback：`daily-cloudcode-pa.sandbox` → `daily-cloudcode-pa` → `cloudcode-pa`；403 時去掉 `project` 重試；429/5xx 換 endpoint
 
-**回傳格式**：`models` 物件，每個 model 的 `quotaInfo.remainingFraction`(0~1) 與 `quotaInfo.resetTime`(RFC3339)。
+**四條視窗（固定順序）**：Claude 5h → Claude weekly → Gemini 5h → Gemini weekly。Window ID：`antigravity-claude-5h`、`antigravity-claude-weekly`、`antigravity-gemini-5h`、`antigravity-gemini-weekly`。
 
-**數據處理（兩條共用額度）**：`claude-*` 聚合為一條 "Claude"、`gemini-*` 聚合為一條 "Gemini"（忽略 gpt/image/chat/tab），各取**最低 remainingFraction**；同一張卡片顯示兩條 bar，固定順序 Claude → Gemini。
+**已用%計算**：`used = (1.0 - remainingFraction) * 100.0`（本專案顯示已用%；Antigravity-Manager UI 顯示剩餘%）。
 
-**已用%計算**：`used = (1.0 - min_remainingFraction) * 100.0`
+**額度滿時 bar 不消失**：缺 `remainingFraction` 或整個 `quotaInfo` 視為 `remaining=0`；`merge_antigravity_windows` 從上次狀態補回缺失 bar（支援舊 ID `antigravity-claude`/`antigravity-gemini` 遷移）。
 
-**診斷方式**：F12 Console 看 `[DIAG] antigravity: aggregated Claude/Gemini used=.. remaining=.. reset=..`。
+**診斷方式**：F12 Console 看 `quotaSummary OK`、`antigravity: Claude/Gemini 5h/weekly used=..`。
 
 ---
 
@@ -168,8 +178,10 @@ log_debug!("[DIAG] provider: key={} value={}", key, value);
 3. **OpenCode weekly/monthly 必須手動設定**：從本地 DB 無法推斷用戶的實際重置時間（數據不足）。UI 提供 day-of-week + time picker（weekly）和 day-of-month + time picker（monthly），儲存在 `app_settings`。
 4. **Antigravity 憑證在 Windows 憑證管理員**：不是檔案。target `gemini:antigravity`，需 `CredReadW` 讀取。憑證裡的 `expiry`/API 的 `resetTime` 皆為 RFC3339（注意：PowerShell `ConvertFrom-Json` 會把它顯示成 `MM/DD/YYYY`，那是顯示假象，原始值是 RFC3339）。
 5. **Antigravity access_token 常已過期**：App 不在前景時 token 不會被刷新，讀到多半過期，故務必依 `expiry` 主動 refresh（並保留 401 重試）。refresh_token 不變、不要寫回憑證管理員。
-6. **Antigravity 兩條共用額度**：`claude-*` 共用一池、`gemini-*` 共用另一池，各取最低 `remainingFraction` 聚合成一條，不要逐模型顯示。
-7. **Claude API 429 處理**：Anthropic OAuth API 經常 429。`merge_account_state` 的 360 分鐘快取是必要設計，避免視窗閃爍消失。
+6. **Antigravity 四視窗**：以 `retrieveUserQuotaSummary` 為主、`fetchAvailableModels` 為 5h 後備；Claude/Gemini 各 5h + weekly，不要逐模型顯示。
+7. **Antigravity 額度滿時 API 常省略 quota 欄位**：缺欄位 = 100% used，並用 `merge_antigravity_windows` 補 bar，否則同步後進度條會消失。
+8. **Claude API 429 處理**：Anthropic OAuth API 經常 429。`merge_account_state` 的 360 分鐘快取是必要設計，避免視窗閃爍消失。
+9. **GitHub Release 勿覆蓋舊附件**：`gh release upload --clobber` 會替換同名檔案；發新版請新 tag（如 v1.2.1），建置檔名已與 GitHub 對齊，無需手動 rename。
 
 ### 七、常見問題速查
 
@@ -180,6 +192,8 @@ log_debug!("[DIAG] provider: key={} value={}", key, value);
 | OpenCode weekly/monthly reset 不對 | 使用了硬編碼時間而非用戶設定 | 檢查 `get_settings` 是否讀到正確的 `opencode_weekly/monthly_reset` |
 | Antigravity 顯示未連線 | Windows 憑證管理員無 `gemini:antigravity` | `cmdkey /list` 確認；請先在 Antigravity 登入 |
 | Antigravity Claude/Gemini 皆 0% 或 API 失敗 | access_token 過期且 refresh 失敗 | 看 F12 `antigravity:` 日誌的 refresh 結果；必要時重新登入 Antigravity |
+| Antigravity bar 用盡後消失 | API 省略 `remainingFraction` 且未 merge | 確認 `apply_antigravity_quota` 缺欄位視為 100%；`merge_antigravity_windows` 有補回 |
+| Antigravity 只有 2 條 bar | 使用 v1.2.0 或 summary API 失敗 | 升級 v1.2.1；看 F12 是否有 `quotaSummary OK` |
 | Claude 視窗消失後又出現 | `merge_account_state` 360 分鐘快取生效 | 這是 feature，不是 bug |
 | 同步後 Console 無日誌 | `get_debug_logs` 呼叫失敗或無日誌產生 | 檢查 Rust 端是否有 `log_debug!` 呼叫 |
 

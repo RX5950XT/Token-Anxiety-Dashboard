@@ -9,7 +9,7 @@ Token Anxiety Dashboard 是一個 Tauri 2 桌面版額度儀表板，集中追�
 - 面板支援拖曳排序，排序會存回本地 SQLite。
 - 設定面板支援繁體中文 / English、淺色 / 深色 / 極光玻璃 / 石墨夜色主題。
 - 設定面板可勾選「顯示項目」，自由決定 Claude Code / Codex / Antigravity / OpenCode 哪些要顯示。
-- Antigravity 卡片底下顯示 **Claude** 與 **Gemini** 兩條共用額度（各自進度條與重置時間）。
+- Antigravity 卡片顯示 **Claude** 與 **Gemini** 各 **5 小時滾動** + **每週用量** 共 4 條進度條（與 Claude Code / Codex 相同視窗類型）。
 - **手動同步**：按「同步」按鈕才會刷新本機資料，無背景自動輪詢。
 - **F12 開啟 DevTools**：同步後會在 Console 輸出 `[Backend Diagnostics]` 後端除錯日誌。
 
@@ -73,6 +73,15 @@ npx tauri build
 
 > **注意**：`target/` 目錄在 `.gitignore` 中，不會提交到 git。每個接手者都必須自行執行 `npx tauri build` 產出安裝檔。
 
+## 下載（GitHub Releases）
+
+預編譯安裝檔見 [Releases](https://github.com/RX5950XT/Token-Anxiety-Dashboard/releases)：
+
+| 版本 | 說明 | 建議下載 |
+|------|------|----------|
+| **v1.2.1**（最新） | Antigravity 四視窗（5h + 每週）、額度滿時 bar 不消失 | `Token.Anxiety.Dashboard_1.2.1_x64-setup.exe` |
+| v1.2.0 | 初版 Antigravity（Claude/Gemini 各一條 bar） | `Token.Anxiety.Dashboard_1.2.0_x64-setup.exe` |
+
 ## 下載與安裝（瀏覽器／SmartScreen 警示）
 
 本專案的安裝檔目前**未做程式碼簽章（code signing）**，因此從 GitHub Releases 下載時，瀏覽器與 Windows 會出現安全警示。**檔案本身是安全的**，警示只是因為「發行者未經受信任憑證簽章、且尚無下載信譽」。
@@ -107,7 +116,7 @@ npx tauri build
 | ----------- | ------------------------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | Claude Code | `~/.claude/.credentials.json` → Anthropic OAuth API        | 5h rolling、7d weekly       | `utilization` 為已用%直接使用                                                                              |
 | Codex       | `~/.codex/auth.json` → ChatGPT `/backend-api/wham/usage` | 5h rolling、weekly          | `used_percent` 直接使用                                                                                    |
-| Antigravity | Windows 憑證管理員 `gemini:antigravity` → Google cloudcode-pa API（`fetchAvailableModels`，ideType=ANTIGRAVITY） | Claude、Gemini 各一條共用額度 | `used = (1 - min_remainingFraction) * 100`；`claude-*` 聚合為 Claude 條、`gemini-*` 聚合為 Gemini 條，各取最低 remainingFraction；access_token 過期時以內建 client refresh |
+| Antigravity | Windows 憑證管理員 `gemini:antigravity` → Google cloudcode-pa API（`retrieveUserQuotaSummary` + `fetchAvailableModels` 後備） | Claude/Gemini 各 **5h + weekly** 共 4 條 | `used = (1 - remainingFraction) * 100`；summary 解析 `groups[].buckets[]`；5h 缺資料時以 models 聚合後備；額度滿時 bar 持久顯示 |
 | OpenCode    | `~/.local/share/opencode/opencode.db`                       | 5h rolling、7d、30d cost    | `used = SUM(cost) / limit`；5h reset = `max(time_created) + 5h`；weekly/monthly reset 由用戶在設定中指定 |
 
 ### 輔助偵測路徑
@@ -125,7 +134,7 @@ npx tauri build
 
 - `claude:` → Claude OAuth API 回傳的視窗與 reset 時間
 - `codex:` → ChatGPT API 回傳的 `used_percent` 與 `reset_at`
-- `antigravity:` → 憑證讀取、token refresh、project_id、聚合後 Claude / Gemini 的 `used`、`remainingFraction`、`resetTime`
+- `antigravity:` → 憑證讀取、token refresh、`quotaSummary`、`loadCodeAssist` tier、Claude/Gemini 5h/weekly 的 `used` 與 `resetTime`
 - `opencode:` → `SUM(cost)` 結果、`max(time_created)`（reset 計算來源）
 
 如果某個 provider 的顯示與官方不符，優先比對上述日誌中的**原始 API 數據**。
@@ -142,6 +151,10 @@ npx tauri build
 
 **顯示「未連線」**：代表 Windows 憑證管理員找不到 `gemini:antigravity`，請先在 Antigravity App 完成 Google 登入。可在 PowerShell 用 `cmdkey /list` 確認是否存在該筆憑證。
 
-**Claude / Gemini 兩條皆 0% 或顯示 API 失敗**：通常是 access_token 過期且 refresh 失敗。看 `[Backend Diagnostics]` 的 `antigravity:` 日誌；若 refresh 也失敗，請在 Antigravity 重新登入。
+**Claude / Gemini 皆 0% 或顯示 API 失敗**：通常是 access_token 過期且 refresh 失敗。看 `[Backend Diagnostics]` 的 `antigravity:` 日誌；若 refresh 也失敗，請在 Antigravity 重新登入。建置版需有 `ANTIGRAVITY_CLIENT_ID`/`SECRET` 才能自動 refresh。
 
-**Used% 與 Antigravity App 不符**：本儀表板把 `claude-*` 聚合成一條、`gemini-*` 聚合成一條，各取**最低** `remainingFraction`（最保守、對應最高使用量）。Antigravity 內各模型同家族共用同一池，數值應一致。
+**只有 2 條 bar**：可能使用 v1.2.0 安裝檔，或 `retrieveUserQuotaSummary` 失敗。請升級 **v1.2.1**，並在 F12 確認是否有 `quotaSummary OK`。
+
+**額度用盡後進度條消失**：v1.2.1 已修復（缺 `remainingFraction` 視為 100% used，並從上次狀態補回 bar）。
+
+**Used% 與 Antigravity App 不符**：本儀表板顯示**已用%**（`1 - remainingFraction`），Antigravity App 可能顯示剩餘%。四條 bar 分別對應 Claude/Gemini 的 5h 與 weekly 視窗；models API 僅作 5h 後備。
