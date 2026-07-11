@@ -4,7 +4,7 @@
 
 ## 專案一句話
 
-Tauri 2 桌面額度儀表板（package **v1.2.1**；**Grok 已合入 main，尚未新 tag 發佈**）。手動同步顯示 Claude Code / Codex / Antigravity / OpenCode / Grok。
+Tauri 2 桌面額度儀表板（**v1.3.0**：Grok weekly + OpenCode 本機估算語意）。手動同步顯示 Claude Code / Codex / Antigravity / OpenCode / Grok。
 
 ## 目前功能狀態
 
@@ -13,7 +13,7 @@ Tauri 2 桌面額度儀表板（package **v1.2.1**；**Grok 已合入 main，尚
 | Claude Code | 5h、7d weekly | Anthropic OAuth API |
 | Codex | 5h、weekly | ChatGPT wham API |
 | Antigravity | Claude/Gemini 各 5h + weekly（4 bar） | `retrieveUserQuotaSummary` + models 後備 |
-| OpenCode | 5h、7d、30d cost | 本機 `opencode.db` |
+| OpenCode | 5h、7d、30d cost | 本機 `opencode.db`（**local 估算**，非 Go 官方 API） |
 | Grok | weekly credit（1 bar） | `~/.grok/auth.json` → `cli-chat-proxy.grok.com/v1/billing?format=credits` |
 
 - 手動同步、F12 `[Backend Diagnostics]`、`visibleProviders`（`null` = 全顯示）。
@@ -21,19 +21,15 @@ Tauri 2 桌面額度儀表板（package **v1.2.1**；**Grok 已合入 main，尚
 
 ## 最近一次任務
 
-### Grok 每週額度（程式已完成，待 release tag）
+### v1.3.0 發佈（本 session）
 
-- 參考 [stablyai/orca](https://github.com/stablyai/orca) `grok-fetcher.ts` / `grok-auth.ts`。
-- 憑證：`$GROK_HOME/auth.json` 或 `~/.grok/auth.json`；entry `key` = access token。
-- API headers：`Authorization: Bearer`、`X-XAI-Token-Auth: xai-grok-cli`、可選 `x-userid`。
-- 視窗 ID：`grok-weekly`；used% = `creditUsagePercent`；reset = `currentPeriod.end`。
-- 不自動 refresh token；401 → 使用者 `grok login`。
-- 測試：前端 11 passed、Rust 14 passed（含 Grok auth/billing unit tests）。
+- **Grok** weekly credit（官方 billing API）
+- **OpenCode**：本機估算語意、只讀 DB、失敗保留 6h、設定頁說明
+- tag：`v1.3.0`；安裝檔建置後上傳 Release，本機 bundle **不進 git**
 
 ### 倉庫清理
 
-- 刪除誤放的 `mcps/`、`release-assets`／`release-assets-*`（已上 GitHub 的安裝檔不必留在 repo）。
-- `.gitignore` 補強：`.env*`、`mcps/`、`release-assets*`、`*.exe`/`*.msi`、sqlite、`auth.json`／credentials。
+- 已 ignore：`mcps/`、`release-assets*`、`.env*`、安裝檔、auth／credentials。
 
 ## Antigravity 技術要點（已發佈 v1.2.1）
 
@@ -64,7 +60,7 @@ Tauri 2 桌面額度儀表板（package **v1.2.1**；**Grok 已合入 main，尚
 ```powershell
 npm test            # 11 passed
 npm run build
-cd src-tauri; cargo test   # 14 passed
+cd src-tauri; cargo test   # 16 passed
 cargo check
 npx tauri build     # 需 ANTIGRAVITY_CLIENT_ID/SECRET
 npm run release:assets

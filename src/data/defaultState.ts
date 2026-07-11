@@ -148,14 +148,14 @@ export function createDefaultState(baseTime = Date.now()): DashboardState {
         "opencode-go",
         "opencode-go",
         "OpenCode",
-        "OpenCode Go",
+        "本機估算（Go 上限）",
         [
           windowFor("opencode-5h", "", "rolling-5h", 4.2, 12, isoIn(baseTime, hours(1.6))),
           windowFor("opencode-weekly", "", "weekly", 14, 30, isoIn(baseTime, days(4.5))),
           windowFor("opencode-monthly", "", "monthly", 22, 60, isoIn(baseTime, days(18))),
         ],
         3,
-        "已從本機 opencode.db 讀取真實用量。",   
+        "本機 opencode.db 成本估算（非 Go 官方額度）。",
       ),
       createAccount(
         "grok-main",

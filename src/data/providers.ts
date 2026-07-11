@@ -31,7 +31,7 @@ export const providerMeta: Record<
     label: "OpenCode",
     shortLabel: "OpenCode",
     accent: "#f0bd4f",
-    description: "偵測 OpenCode provider auth，依官方 dollar limits 追蹤。",
+    description: "本機 opencode.db 成本估算；上限對照 Go 常見 $12/$30/$60（非官方 API）。",
   },
   grok: {
     label: "Grok",

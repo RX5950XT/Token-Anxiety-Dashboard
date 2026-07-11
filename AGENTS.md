@@ -12,7 +12,7 @@
 - Provider adapter 必須標示可信度：`official`、`local`、`estimated`、`manual`。
 - **手動同步**：右上角「同步」觸發，無背景自動輪詢。
 - **F12 DevTools**：同步後 Console 輸出 `[Backend Diagnostics]`。
-- **五個 Provider**（皆接真實本機／官方額度）：Claude Code、Codex、Antigravity、OpenCode、Grok。
+- **五個 Provider**：Claude Code、Codex、Antigravity、OpenCode（本機估算）、Grok。
 - 設定頁「顯示項目」→ `AppSettings.visibleProviders`（`undefined`/`null` = 全顯示；前端用 `== null`）。
 
 ## Provider 邊界
@@ -22,16 +22,16 @@
 | Claude Code | `~/.claude/.credentials.json` → Anthropic OAuth | 5h、7d weekly；API 失敗保留舊視窗最多 6h |
 | Codex | `~/.codex/auth.json` → ChatGPT wham usage | 5h、weekly |
 | Antigravity | Windows 憑證 `gemini:antigravity` → cloudcode-pa | Claude/Gemini 各 5h+weekly（4 bar）；額度滿補 bar；僅 Windows |
-| OpenCode | 本機 `opencode.db` | 5h / 7d / 30d cost；weekly/monthly reset 設定頁手動 |
+| OpenCode | 本機 `opencode.db`（只讀；**local 估算**） | 5h / 7d / 30d cost；上限對照 Go $12/$30/$60；週/月 reset 手動；DB 失敗保留 6h |
 | Grok | `~/.grok/auth.json`（或 `$GROK_HOME`）→ billing credits | 單條 **weekly**；不自動 refresh token |
 
 - Antigravity：`loadCodeAssist` → `retrieveUserQuotaSummary`（主）+ `fetchAvailableModels`（5h 後備）；缺 `remainingFraction` = 100% used；`merge_antigravity_windows` 補 bar。OAuth client 建置時 `ANTIGRAVITY_CLIENT_ID`/`SECRET` 注入。
-- OpenCode：`$.cost` 為增量，`SUM(cost)` 為窗口總量；5h reset = `max(time_created) + 5h`。
+- OpenCode：`$.cost` 為增量，`SUM(cost)` 為窗口總量（**無法依 provider 過濾**）；5h reset = `max(time_created) + 5h`；非 Go 官方 usage API。
 - Grok：`GET …/billing?format=credits`，header 必含 `X-XAI-Token-Auth: xai-grok-cli`；`creditUsagePercent` + `currentPeriod.end`；失敗請 `grok login`。
 
 ## 發佈與建置
 
-- **package 版本**：`1.2.1`（GitHub 已發佈 = Antigravity 四視窗）。**Grok 已在 main 程式碼**，發佈時請切 **新 tag**（建議 v1.2.2），勿 `--clobber` 覆蓋舊附件。
+- **package 版本**：**1.3.0**（Grok weekly + OpenCode 本機估算改良）。發佈請 **新 tag 新 release**，勿 `--clobber` 覆蓋舊附件。
 - 安裝檔：`Token.Anxiety.Dashboard_<version>_x64-setup.exe`（`productName` = `Token.Anxiety.Dashboard`）。
 - `npm run release:assets` 印出 NSIS/MSI 路徑。
 - 建置前設 `ANTIGRAVITY_CLIENT_ID`/`ANTIGRAVITY_CLIENT_SECRET`（見 README）。

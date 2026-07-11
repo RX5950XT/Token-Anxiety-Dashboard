@@ -1,5 +1,5 @@
 use chrono::{DateTime, Datelike, Timelike, Utc};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -359,17 +359,22 @@ fn provider_context(
         })
 }
 
-/// When an OAuth/quota API temporarily fails, preserve the previous windows
-/// so the account doesn't "disappear" from the dashboard.
+/// When an OAuth/quota API or local DB temporarily fails, preserve previous
+/// windows so the account doesn't "disappear" from the dashboard.
 fn merge_account_state(new: UsageAccount, previous: Option<&UsageAccount>, now: DateTime<Utc>) -> UsageAccount {
     let mut merged = new;
     let Some(prev) = previous else {
         return merged;
     };
 
-    // If new state downgraded to "connected" with no windows, but previous had windows,
-    // preserve previous windows for up to 360 minutes to avoid flickering during rate limits.
-    if merged.status == "connected" && merged.windows.is_empty() && !prev.windows.is_empty() {
+    // Soft failures: API rate-limit (`connected` + empty windows), or OpenCode
+    // local DB open/query failure (`available`/`connected` + empty windows).
+    let is_soft_empty = merged.windows.is_empty()
+        && !prev.windows.is_empty()
+        && (merged.status == "connected"
+            || (merged.provider == "opencode-go" && merged.status != "disconnected"));
+
+    if is_soft_empty {
         let last_updated = DateTime::parse_from_rfc3339(&prev.last_updated).ok();
         let is_recent = last_updated
             .map(|dt| (now - dt.with_timezone(&Utc)).num_minutes() < 360)
@@ -377,10 +382,14 @@ fn merge_account_state(new: UsageAccount, previous: Option<&UsageAccount>, now: 
 
         if is_recent {
             merged.windows = prev.windows.clone();
-            merged.status = prev.status.clone();
+            if merged.status == "connected" {
+                merged.status = prev.status.clone();
+            }
             merged.accuracy = "estimated".to_string();
             if merged.notes.is_empty() {
-                merged.notes = "額度 API 暫時無法讀取，顯示為上次成功取得的資料。".to_string();
+                merged.notes = "額度暫時無法讀取，顯示為上次成功取得的資料。".to_string();
+            } else if !merged.notes.contains("上次") {
+                merged.notes = format!("{} 顯示上次成功同步的視窗。", merged.notes.trim_end_matches('。'));
             }
         }
     }
@@ -1033,46 +1042,70 @@ fn refresh_opencode_account(
         "opencode-go",
         "opencode-go",
         "OpenCode",
-        "OpenCode Go",
+        "本機估算（Go 上限）",
         context.order,
         now,
     );
 
-    let auth_path = home
-        .join(".local")
-        .join("share")
-        .join("opencode")
-        .join("auth.json");
-    let db_path = home
-        .join(".local")
-        .join("share")
-        .join("opencode")
-        .join("opencode.db");
+    let (auth_path, db_path) = opencode_paths(home);
 
     if !auth_path.exists() && !db_path.exists() {
         account.status = "disconnected".to_string();
-        account.notes = "找不到 OpenCode auth 或資料庫。".to_string();
+        account.notes = "找不到 OpenCode auth 或本機資料庫。".to_string();
         return account;
     }
 
     account.status = "available".to_string();
     account.accuracy = "local".to_string();
-    account.notes =
-        "已從 OpenCode 本機資料庫彙總真實成本；視窗為 trailing usage，非固定週期重置。"
-            .to_string();
+    account.notes = "本機 opencode.db 成本估算（非 Go 官方額度）。SUM 含所有經 OpenCode 的用量，上限對照 Go 常見 $12/$30/$60。".to_string();
 
-    if let Ok(connection) = Connection::open(db_path) {
-        apply_opencode_windows(&mut account, &connection, settings, now);
-    } else {
-        account.notes = "已找到 OpenCode auth，但目前無法開啟本機資料庫。".to_string();
+    if !db_path.exists() {
+        account.notes = "已找到 OpenCode auth，但找不到 opencode.db（請先在 OpenCode 產生用量）。".to_string();
+        return account;
+    }
+
+    match open_opencode_db(&db_path) {
+        Ok(connection) => {
+            apply_opencode_windows(&mut account, &connection, settings, now);
+            if account.windows.is_empty() {
+                account.notes =
+                    "已開啟 opencode.db，但未能讀取任何用量視窗。".to_string();
+            }
+        }
+        Err(error) => {
+            log_debug!("[DIAG] opencode: open db failed: {}", error);
+            // Soft failure: empty windows → merge_account_state may restore cache.
+            account.notes = format!("無法開啟本機資料庫（只讀）：{}。", error);
+        }
     }
 
     account
 }
 
+/// Prefer read-only open so we never touch OpenCode's live DB while it is in use.
+fn open_opencode_db(path: &Path) -> Result<Connection, String> {
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let connection = Connection::open_with_flags(path, flags).map_err(|e| e.to_string())?;
+    // Wait briefly if the writer holds a short lock (WAL).
+    connection
+        .busy_timeout(std::time::Duration::from_millis(2_000))
+        .map_err(|e| e.to_string())?;
+    log_debug!("[DIAG] opencode: opened db read-only at {}", path.display());
+    Ok(connection)
+}
+
+fn opencode_paths(home: &Path) -> (PathBuf, PathBuf) {
+    let share = home.join(".local").join("share").join("opencode");
+    (
+        share.join("auth.json"),
+        share.join("opencode.db"),
+    )
+}
+
 fn apply_opencode_windows(account: &mut UsageAccount, connection: &Connection, settings: &AppSettings, now: DateTime<Utc>) {
     let now_ms = now.timestamp_millis();
     log_debug!("[DIAG] opencode: db opened, now_ms={}", now_ms);
+    // Dollar limits mirror common OpenCode Go plan caps (local estimate only).
     let windows = [
         ("opencode-5h", "", "rolling-5h", 12.0, FIVE_HOURS_MS),
         ("opencode-weekly", "", "weekly", 30.0, SEVEN_DAYS_MS),
@@ -1085,7 +1118,10 @@ fn apply_opencode_windows(account: &mut UsageAccount, connection: &Connection, s
             Ok(cost) => cost,
             Err(error) => {
                 log_debug!("[DIAG] opencode: query cost failed for {}: {}", id, error);
-                account.notes = format!("{} 視窗讀取失敗：{}；其餘視窗可能仍可正常顯示。", label, error);
+                account.notes = format!(
+                    "本機估算讀取失敗（{}）：{}；其餘視窗可能仍可顯示。",
+                    kind, error
+                );
                 continue;
             }
         };
@@ -1097,7 +1133,7 @@ fn apply_opencode_windows(account: &mut UsageAccount, connection: &Connection, s
                     log_debug!("[DIAG] opencode: no records in {} window, reset_at=now", id);
                     now.to_rfc3339()
                 });
-            
+
             // If reset time has passed, the rolling window is empty
             let final_used = if let Ok(reset_dt) = reset_at.parse::<DateTime<Utc>>() {
                 if now > reset_dt {
@@ -1108,9 +1144,11 @@ fn apply_opencode_windows(account: &mut UsageAccount, connection: &Connection, s
             } else {
                 used
             };
-            
+
             (final_used, reset_at)
         } else if kind == "weekly" {
+            // used% = trailing 7d cost; reset countdown from user settings
+            // (local estimate — not official Go subscription windows).
             let reset_at = settings.opencode_weekly_reset.as_ref()
                 .and_then(|config| calculate_next_weekly_reset(config, now))
                 .unwrap_or_default();
@@ -1459,14 +1497,15 @@ fn inspect_path(provider: &str, label: &str, path: PathBuf) -> ProviderEnvironme
 }
 
 fn inspect_opencode(home: PathBuf) -> ProviderEnvironment {
-    let auth_path = home
-        .join(".local")
-        .join("share")
-        .join("opencode")
-        .join("auth.json");
+    let (auth_path, db_path) = opencode_paths(&home);
     let config_path = home.join(".config").join("opencode").join("opencode.json");
-    let detected = auth_path.exists() || config_path.exists();
-    let source = format!("{} | {}", auth_path.display(), config_path.display());
+    let detected = auth_path.exists() || config_path.exists() || db_path.exists();
+    let source = format!(
+        "{} | {} | {}",
+        auth_path.display(),
+        db_path.display(),
+        config_path.display()
+    );
 
     ProviderEnvironment {
         provider: "opencode-go".to_string(),
@@ -1474,9 +1513,9 @@ fn inspect_opencode(home: PathBuf) -> ProviderEnvironment {
         source,
         detected,
         detail: if detected {
-            "已找到 OpenCode auth 或 config。".to_string()
+            "已找到 OpenCode 本機 auth / db / config（用量為本機估算）。".to_string()
         } else {
-            "尚未找到 OpenCode auth/config。".to_string()
+            "尚未找到 OpenCode auth/db/config。".to_string()
         },
     }
 }
@@ -1560,7 +1599,7 @@ fn default_dashboard_state() -> DashboardState {
                 "opencode-go",
                 "opencode-go",
                 "OpenCode",
-                "OpenCode Go",
+                "本機估算（Go 上限）",
                 3,
                 Utc::now(),
             ),
@@ -2157,6 +2196,94 @@ mod tests {
         assert_eq!(merged.status, "available"); // preserved
         assert_eq!(merged.windows.len(), 1); // preserved
         assert_eq!(merged.accuracy, "estimated");
+    }
+
+    #[test]
+    fn test_merge_opencode_preserves_windows_on_db_failure() {
+        let prev = UsageAccount {
+            id: "opencode-go".to_string(),
+            provider: "opencode-go".to_string(),
+            account_name: "OpenCode".to_string(),
+            plan_name: "本機估算（Go 上限）".to_string(),
+            status: "available".to_string(),
+            accuracy: "local".to_string(),
+            last_updated: Utc::now().to_rfc3339(),
+            windows: vec![QuotaWindow {
+                id: "opencode-5h".to_string(),
+                label: String::new(),
+                kind: "rolling-5h".to_string(),
+                used: 3.0,
+                limit: 12.0,
+                reset_at: Utc::now().to_rfc3339(),
+            }],
+            notes: "ok".to_string(),
+            order: 3,
+        };
+
+        let next = UsageAccount {
+            windows: Vec::new(),
+            notes: "無法開啟本機資料庫（只讀）：locked。".to_string(),
+            accuracy: "local".to_string(),
+            ..prev.clone()
+        };
+
+        let merged = merge_account_state(next, Some(&prev), Utc::now());
+        assert_eq!(merged.windows.len(), 1);
+        assert_eq!(merged.accuracy, "estimated");
+        assert!(merged.notes.contains("上次"));
+    }
+
+    #[test]
+    fn test_query_opencode_cost_sums_incremental_rows() {
+        let dir = std::env::temp_dir().join(format!(
+            "tad-opencode-test-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let db_path = dir.join("opencode.db");
+        {
+            let conn = Connection::open(&db_path).expect("create db");
+            conn.execute_batch(
+                "create table part (
+                    id text primary key,
+                    message_id text not null,
+                    session_id text not null,
+                    time_created integer not null,
+                    time_updated integer not null,
+                    data text not null
+                );",
+            )
+            .expect("schema");
+            let now_ms = Utc::now().timestamp_millis();
+            for (i, cost) in [(1, 1.5), (2, 2.5)].into_iter() {
+                conn.execute(
+                    "insert into part (id, message_id, session_id, time_created, time_updated, data)
+                     values (?1, 'm', 's', ?2, ?2, ?3)",
+                    params![
+                        format!("p{i}"),
+                        now_ms - 60_000,
+                        format!(r#"{{"type":"step-finish","cost":{cost}}}"#)
+                    ],
+                )
+                .expect("insert");
+            }
+            // Outside window — should not count
+            conn.execute(
+                "insert into part (id, message_id, session_id, time_created, time_updated, data)
+                 values ('old', 'm', 's', ?1, ?1, ?2)",
+                params![
+                    now_ms - FIVE_HOURS_MS - 10_000,
+                    r#"{"type":"step-finish","cost":99.0}"#
+                ],
+            )
+            .expect("old insert");
+        }
+
+        let conn = open_opencode_db(&db_path).expect("read-only open");
+        let since = Utc::now().timestamp_millis() - FIVE_HOURS_MS;
+        let sum = query_opencode_cost(&conn, since).expect("sum");
+        assert!((sum - 4.0).abs() < 1e-9, "sum={sum}");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

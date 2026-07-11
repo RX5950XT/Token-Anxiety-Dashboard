@@ -23,7 +23,7 @@
 | Claude Code | `~/.claude/.credentials.json` → Anthropic OAuth API | 5h rolling、7d weekly | 失敗時保留舊視窗最多 6 小時 |
 | Codex | `~/.codex/auth.json` → ChatGPT `/backend-api/wham/usage` | 5h rolling、weekly | ChatGPT access_token |
 | Antigravity | Windows 憑證管理員 `gemini:antigravity` → Google cloudcode-pa | Claude/Gemini 各 **5h + weekly**（4 bar） | summary 主路徑 + models 5h 後備；額度滿 bar 不消失；僅 Windows |
-| OpenCode | `~/.local/share/opencode/opencode.db` | 5h、7d、30d cost | 5h reset = `max(time_created)+width`；weekly/monthly 手動設定 |
+| OpenCode | `~/.local/share/opencode/opencode.db`（只讀） | 5h、7d、30d cost | **local 估算**（非 Go 官方）；`SUM` 混全 provider；上限對照 $12/$30/$60；5h=`max+width`；週/月 reset 手動；DB 失敗保留 6h |
 | Grok | `~/.grok/auth.json`（或 `$GROK_HOME`）→ billing credits | **weekly** 一條 bar | `creditUsagePercent`；header 需 `X-XAI-Token-Auth: xai-grok-cli`；不自動 refresh |
 
 - Windows 外部 CLI 呼叫帶 `CREATE_NO_WINDOW`。
@@ -42,7 +42,7 @@
 npm test
 npm run build
 cd src-tauri
-cargo test   # 14 passed（含 Grok）
+cargo test   # 16 passed
 cargo check
 npx tauri build
 npm run release:assets
@@ -53,25 +53,27 @@ npm run release:assets
 - `tauri.conf.json`：`productName` = `Token.Anxiety.Dashboard`，`app.windows.title` = `Token Anxiety Dashboard`。
 - 產物：`Token.Anxiety.Dashboard_<version>_x64-setup.exe`、`…_x64_en-US.msi`。
 - GitHub：**新 tag 新 release**；勿 `gh release upload --clobber`。
-- **已發佈最新 tag：v1.2.1**（Antigravity 四視窗）。**Grok 已在 main 程式碼**，發佈時建議 **v1.2.2**（或下一版號）。v1.2.0 = 初版 Antigravity（兩條 bar）。
+- **已發佈最新 tag：v1.3.0**（Grok weekly + OpenCode 本機估算）。v1.2.1 = Antigravity 四視窗；v1.2.0 = 初版 Antigravity（兩條 bar）。
 
 ---
 
 ## 實踐紀錄與故障排查（給後續 AI 接手用）
 
-### 一、OpenCode 的 Trailing Window 計算（最容易出錯）
+### 一、OpenCode 本機估算（最容易誤解）
 
-**檔案**：`src-tauri/src/lib.rs` → `query_opencode_cost`、`query_trailing_reset_at`、`calculate_next_weekly_reset`、`calculate_next_monthly_reset`
+**檔案**：`open_opencode_db`、`query_opencode_cost`、`query_trailing_reset_at`、`merge_account_state`（opencode soft-fail）、設定頁 `opencodeResetHint`。
 
-**核心**：`part` 表 `step-finish` 的 `$.cost` 是**單筆增量**，`SUM(cost)` 即窗口總用量。
+**語意**：這是 **local 估算**，不是 OpenCode Go 官方額度 API（官方目前沒有 usage endpoint）。plan 顯示「本機估算（Go 上限）」。
 
-**5h Rolling**：used = `SUM(cost)` / $12；reset = `max(time_created) + 5h`；`now > reset_at` 時 used → 0%。
+**核心**：`part` 表 `step-finish` 的 `$.cost` 是**單筆增量**，`SUM(cost)` 即窗口總用量。**無法依 provider 過濾**（row 無 providerID）→ 混用 Claude/Grok/Go 等會偏高。
 
-**Weekly/Monthly**：used = `SUM(cost)` / limit；reset 由設定頁指定，存 `app_settings`。
+**5h Rolling**：used = `SUM` / $12；reset = `max(time_created) + 5h`；`now > reset_at` → used 0%。
 
-**診斷**：F12 `[Backend Diagnostics]` → `opencode:` 的 `query cost`、`latest record`、`calculated reset_at`。
+**Weekly/Monthly**：used = trailing 7d/30d `SUM` / $30/$60；**reset 倒數**由設定頁指定（與 used 視窗語意不對稱，屬估算）。
 
-**官方 limit**：5h = $12、7d = $30、30d = $60。
+**開檔**：`SQLITE_OPEN_READ_ONLY` + busy_timeout 2s；失敗則 empty windows → merge 保留 6h 內上次資料（accuracy → estimated）。
+
+**診斷**：F12 `opencode:` → `opened db read-only`、`query cost`、`calculated reset_at`。
 
 ---
 
@@ -140,7 +142,8 @@ log_debug!("[DIAG] provider: key={} value={}", key, value);
 
 1. OpenCode `$.cost` 是增量 → 直接 `SUM`，勿做 delta。
 2. OpenCode 5h reset 用 `max(time_created)+5h`，不是 `min`。
-3. OpenCode weekly/monthly reset 必須使用者設定。
+3. OpenCode weekly/monthly reset 必須使用者設定；勿宣稱是 Go 官方額度。
+3b. OpenCode 只讀開 DB；失敗靠 merge 保留 6h；step-finish 無 provider 欄位會混用量。
 4. Antigravity 憑證在 Windows 憑證管理員，不是檔案。
 5. Antigravity access_token 常過期 → 務必依 expiry refresh。
 6. Antigravity 四視窗：summary 主、models 後備；不要逐模型 bar。
@@ -156,6 +159,8 @@ log_debug!("[DIAG] provider: key={} value={}", key, value);
 |---------|---------|------|
 | OpenCode 5h reset 過長 | 用了 `min` 非 `max` | F12 newest + 5h |
 | OpenCode used% 過低 | 對 cost 做了 delta | 確認 `SUM(cost)` |
+| OpenCode used% 偏高 | 混了其他 provider | 屬本機估算限制 |
+| OpenCode 同步無 bar | DB 鎖／讀取失敗 | F12 `open db failed`；6h 內應有上次資料 |
 | OpenCode weekly/monthly 不對 | 未讀用戶設定 | `opencode_*_reset` |
 | Antigravity 未連線 | 無 `gemini:antigravity` | `cmdkey /list`、先登入 App |
 | Antigravity 全 0% / API 失敗 | token 過期且 refresh 失敗 | F12 refresh；重登入 |

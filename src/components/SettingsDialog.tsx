@@ -123,10 +123,11 @@ export function SettingsDialog({ settings, onClose, onChange }: SettingsDialogPr
           ))}
         </div>
 
-        {/* OpenCode Reset Settings */}
+        {/* OpenCode local estimate (reset schedule for trailing windows) */}
         <div className="settings-group">
           <span className="settings-label">{t(settings.locale, "opencodeResetSettings")}</span>
-          
+          <span className="reset-setting-value">{t(settings.locale, "opencodeResetHint")}</span>
+
           {/* 5h Rolling - Read Only */}
           <div className="reset-setting-row">
             <span className="reset-setting-label">{t(settings.locale, "fiveHourRolling")}</span>

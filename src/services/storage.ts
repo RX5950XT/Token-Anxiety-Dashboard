@@ -104,8 +104,8 @@ export async function scanProviderEnvironment(): Promise<ProviderEnvironment[]> 
         provider: "opencode-go",
         label: "OpenCode",
         detected: false,
-        source: "~/.local/share/opencode/auth.json",
-        detail: "瀏覽器預覽模式無法讀取 OpenCode auth。",
+        source: "~/.local/share/opencode/opencode.db",
+        detail: "瀏覽器預覽模式無法讀取 OpenCode 本機資料庫。",
       },
       {
         provider: "grok",

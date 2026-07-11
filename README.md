@@ -58,10 +58,10 @@ npx tauri build
 - NSIS：`src-tauri/target/release/bundle/nsis/Token.Anxiety.Dashboard_<version>_x64-setup.exe`
 - MSI：`src-tauri/target/release/bundle/msi/Token.Anxiety.Dashboard_<version>_x64_en-US.msi`
 
-例（v1.2.1）：
+例（v1.3.0）：
 
-- `Token.Anxiety.Dashboard_1.2.1_x64-setup.exe`
-- `Token.Anxiety.Dashboard_1.2.1_x64_en-US.msi`
+- `Token.Anxiety.Dashboard_1.3.0_x64-setup.exe`
+- `Token.Anxiety.Dashboard_1.3.0_x64_en-US.msi`
 
 上傳前：`npm run release:assets` 印出路徑。發佈請**新 tag／新 release**，勿 `--clobber` 覆蓋舊附件。
 
@@ -75,10 +75,9 @@ npx tauri build
 
 | 版本 | 說明 | 建議下載 |
 |------|------|----------|
-| **v1.2.1**（目前發佈最新） | Antigravity 四視窗（5h + 每週）、額度滿 bar 不消失 | `Token.Anxiety.Dashboard_1.2.1_x64-setup.exe` |
+| **v1.3.0**（目前發佈最新） | Grok 每週 credit；OpenCode 本機估算語意；五個 provider | `Token.Anxiety.Dashboard_1.3.0_x64-setup.exe` |
+| v1.2.1 | Antigravity 四視窗（5h + 每週）、額度滿 bar 不消失 | `Token.Anxiety.Dashboard_1.2.1_x64-setup.exe` |
 | v1.2.0 | 初版 Antigravity（Claude/Gemini 各一條 bar） | `Token.Anxiety.Dashboard_1.2.0_x64-setup.exe` |
-
-> **Grok 每週額度**已合入原始碼（main），尚未以獨立 tag 發佈。需要 Grok 卡片請自行從 main 建置，或等下一版 release（建議 v1.2.2）。
 
 ## 下載與安裝（瀏覽器／SmartScreen 警示）
 
@@ -105,7 +104,7 @@ npx tauri build
 | Claude Code | `~/.claude/.credentials.json` → Anthropic OAuth | 5h、7d weekly | `utilization` 已用% |
 | Codex | `~/.codex/auth.json` → ChatGPT wham usage | 5h、weekly | `used_percent` |
 | Antigravity | Windows 憑證 `gemini:antigravity` → cloudcode-pa（summary + models 後備） | Claude/Gemini 各 5h+weekly | `used = (1 - remainingFraction) * 100`；額度滿 bar 持久 |
-| OpenCode | `~/.local/share/opencode/opencode.db` | 5h、7d、30d cost | `SUM(cost)/limit`；5h reset = `max(time_created)+5h`；週／月 reset 設定頁 |
+| OpenCode | `~/.local/share/opencode/opencode.db`（只讀） | 5h、7d、30d cost | **本機估算**（非 Go 官方）；`SUM(cost)/limit` 混全 provider；上限對照 $12/$30/$60；5h reset = `max+5h`；週／月 reset 設定頁 |
 | Grok | `~/.grok/auth.json`（或 `$GROK_HOME`）→ `cli-chat-proxy.grok.com/v1/billing?format=credits` | weekly credit | `creditUsagePercent` 已用%；reset = `currentPeriod.end` |
 
 ### 輔助偵測路徑
@@ -134,9 +133,12 @@ npx tauri build
 
 ### OpenCode 常見問題
 
+- **不是 Go 官方額度**：目前無 usage API；卡片為本機 DB 估算，plan 顯示「本機估算（Go 上限）」。
+- **Used% 偏高**：`SUM` 含所有經 OpenCode 的 provider，無法只算 Go。
 - **Used% 過低**：`$.cost` 是增量，應用 `SUM(cost)`，勿當累計做 delta。
 - **5h reset 過長**：reset = **最新**使用時間 + 5h（`max` 不是 `min`）。
 - **Weekly/Monthly 不對**：須在設定頁手動指定重置時間。
+- **同步後無視窗**：DB 被鎖或讀取失敗 → 6 小時內會顯示上次成功資料（F12 看 `opencode: open db failed`）。
 
 ### Antigravity 常見問題
 
@@ -151,7 +153,7 @@ npx tauri build
 - **未連線／找不到憑證**：執行 `grok login`，確認 `~/.grok/auth.json`（或 `$GROK_HOME`）存在且 entry 有 `key`。
 - **API 401/403**：session 失效 → 重新 `grok login`。請求須帶 `X-XAI-Token-Auth: xai-grok-cli`。
 - **沒有 5h 條**：Grok 訂閱目前為**每週 credit**，儀表板只顯示 weekly（與 Orca 一致）。
-- **發佈版沒有 Grok 卡片**：v1.2.1 安裝檔尚無 Grok；請從 main 建置或等下一版 release。
+- **發佈版沒有 Grok 卡片**：請安裝 **v1.3.0+**。
 
 ## 開發與提交注意
 

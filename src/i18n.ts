@@ -49,7 +49,9 @@ const dictionary = {
     rateWindow: "刷新機制",
     sourceStatus: "資料來源",
     quotaUnavailable: "已連線但暫無可讀取的額度視窗（API 可能暫時無法存取）。",
-    opencodeResetSettings: "OpenCode 額度重置設定",
+    opencodeResetSettings: "OpenCode 本機估算設定",
+    opencodeResetHint:
+      "數字來自本機 opencode.db 的 SUM(cost)，不是 Go 官方額度。所有經 OpenCode 的 provider 會混在一起；上限預設對照 Go $12 / $30 / $60。",
     fiveHourRolling: "5 小時滾動",
     autoCalculate: "自動計算（最後使用後 5 小時歸零）",
     weeklyReset: "每週重置",
@@ -113,7 +115,9 @@ const dictionary = {
     rateWindow: "Refresh rule",
     sourceStatus: "Source",
     quotaUnavailable: "Connected but no readable quota window available (API may be temporarily inaccessible).",
-    opencodeResetSettings: "OpenCode Quota Reset",
+    opencodeResetSettings: "OpenCode local estimate",
+    opencodeResetHint:
+      "Values come from SUM(cost) on local opencode.db, not official Go quota. All OpenCode traffic is mixed; defaults mirror Go caps $12 / $30 / $60.",
     fiveHourRolling: "5-Hour Rolling",
     autoCalculate: "Auto (resets 5h after last use)",
     weeklyReset: "Weekly Reset",
