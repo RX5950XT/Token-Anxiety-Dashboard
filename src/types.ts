@@ -1,4 +1,4 @@
-export type ProviderId = "claude-code" | "codex" | "antigravity" | "opencode-go";
+export type ProviderId = "claude-code" | "codex" | "antigravity" | "opencode-go" | "grok";
 
 export type AccuracyLevel = "official" | "local" | "estimated" | "manual";
 

@@ -20,7 +20,7 @@ describe("SettingsDialog", () => {
     expect(screen.getByText("顯示項目")).toBeInTheDocument();
     // All providers default to visible when not configured.
     const checkboxes = screen.getAllByRole("checkbox") as HTMLInputElement[];
-    expect(checkboxes.length).toBe(4);
+    expect(checkboxes.length).toBe(5);
     expect(checkboxes.every((c) => c.checked)).toBe(true);
   });
 });

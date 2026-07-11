@@ -8,34 +8,40 @@
 ## 架構
 
 - 這是 Tauri 2 桌面 App，不是 Vercel-only 純前端。
-- 前端使用 React + TypeScript + Vite。
-- 本地狀態由 Rust command 寫入 SQLite，避免只依賴瀏覽器 storage。
-- Provider adapter 必須明確標示資料可信度：`official`、`local`、`estimated`、`manual`。
+- 前端：React + TypeScript + Vite；本地狀態由 Rust command 寫入 SQLite。
+- Provider adapter 必須標示可信度：`official`、`local`、`estimated`、`manual`。
 - **手動同步**：右上角「同步」觸發，無背景自動輪詢。
-- **F12 DevTools**：同步後 Console 輸出 `[Backend Diagnostics]` 後端日誌。
-- 四個 Provider 皆已接上真實本機額度資料：Claude Code（Anthropic OAuth API）、Codex（ChatGPT API）、Antigravity（Windows 憑證管理員 → Google cloudcode-pa API）、OpenCode（本地 SQLite db）。
-- 設定頁「顯示項目」可勾選要顯示哪些 provider，存於 `AppSettings.visibleProviders`（`undefined`/`null` = 全部顯示）；前端用 `== null` 判斷（Rust `None` 序列化為 JSON `null`）。
+- **F12 DevTools**：同步後 Console 輸出 `[Backend Diagnostics]`。
+- **五個 Provider**（皆接真實本機／官方額度）：Claude Code、Codex、Antigravity、OpenCode、Grok。
+- 設定頁「顯示項目」→ `AppSettings.visibleProviders`（`undefined`/`null` = 全顯示；前端用 `== null`）。
 
 ## Provider 邊界
 
-- Claude Code：Anthropic OAuth API。API 失敗時 `merge_account_state` 保留舊視窗最多 6 小時，避免閃爍。
-- Codex：ChatGPT `/backend-api/wham/usage` API。
-- Antigravity（取代 Gemini CLI）：Windows 憑證管理員 `gemini:antigravity` 讀 token；過期時以建置時注入的 OAuth client refresh（不寫回憑證管理員）。`loadCodeAssist`（`ideType=ANTIGRAVITY`）取 project + 方案名 → `retrieveUserQuotaSummary` 取 Claude/Gemini 的 **5h + weekly** 四條視窗（best-effort）→ `fetchAvailableModels` 作 5h 後備。額度用盡時缺 `remainingFraction` 視為 100% used；`merge_antigravity_windows` 補回消失的 bar。憑證讀取僅 Windows。
-- OpenCode：本機 `opencode.db`；`$.cost` 為增量值，`SUM(cost)` 為窗口總用量；5h reset = `max(time_created) + 5h`；weekly/monthly reset 由設定頁手動指定。
+| Provider | 來源 | 視窗 |
+|----------|------|------|
+| Claude Code | `~/.claude/.credentials.json` → Anthropic OAuth | 5h、7d weekly；API 失敗保留舊視窗最多 6h |
+| Codex | `~/.codex/auth.json` → ChatGPT wham usage | 5h、weekly |
+| Antigravity | Windows 憑證 `gemini:antigravity` → cloudcode-pa | Claude/Gemini 各 5h+weekly（4 bar）；額度滿補 bar；僅 Windows |
+| OpenCode | 本機 `opencode.db` | 5h / 7d / 30d cost；weekly/monthly reset 設定頁手動 |
+| Grok | `~/.grok/auth.json`（或 `$GROK_HOME`）→ billing credits | 單條 **weekly**；不自動 refresh token |
+
+- Antigravity：`loadCodeAssist` → `retrieveUserQuotaSummary`（主）+ `fetchAvailableModels`（5h 後備）；缺 `remainingFraction` = 100% used；`merge_antigravity_windows` 補 bar。OAuth client 建置時 `ANTIGRAVITY_CLIENT_ID`/`SECRET` 注入。
+- OpenCode：`$.cost` 為增量，`SUM(cost)` 為窗口總量；5h reset = `max(time_created) + 5h`。
+- Grok：`GET …/billing?format=credits`，header 必含 `X-XAI-Token-Auth: xai-grok-cli`；`creditUsagePercent` + `currentPeriod.end`；失敗請 `grok login`。
 
 ## 發佈與建置
 
-- 目前版本 **v1.2.1**；安裝檔檔名與 GitHub 一致：`Token.Anxiety.Dashboard_<version>_x64-setup.exe`（`productName` = `Token.Anxiety.Dashboard`）。
-- `npm run release:assets` 印出 NSIS/MSI 路徑；發佈請**新 tag 新 release**，勿 `gh release upload --clobber` 覆蓋舊版。
-- 建置前設 `ANTIGRAVITY_CLIENT_ID`/`ANTIGRAVITY_CLIENT_SECRET` 環境變數（見 README）。
+- **package 版本**：`1.2.1`（GitHub 已發佈 = Antigravity 四視窗）。**Grok 已在 main 程式碼**，發佈時請切 **新 tag**（建議 v1.2.2），勿 `--clobber` 覆蓋舊附件。
+- 安裝檔：`Token.Anxiety.Dashboard_<version>_x64-setup.exe`（`productName` = `Token.Anxiety.Dashboard`）。
+- `npm run release:assets` 印出 NSIS/MSI 路徑。
+- 建置前設 `ANTIGRAVITY_CLIENT_ID`/`ANTIGRAVITY_CLIENT_SECRET`（見 README）。
 
 ## 品質要求
 
-- 優先不可變資料更新，不直接 mutate React state。
-- 邊界輸入要驗證，provider 掃描失敗不可靜默吞掉。
-- 新增功能需補 Vitest 或 Rust 測試。
-- UI 新增互動時需檢查小視窗排版不重疊。
-- 不顯示「新增多帳號」入口，除非後續已能可靠辨識本機多帳號資料來源。
+- 不可變更新 state；邊界輸入要驗證；provider 失敗不可靜默吞掉。
+- 新功能補 Vitest 或 Rust 測試；UI 注意小視窗排版。
+- 不顯示「新增多帳號」入口，除非能可靠辨識本機多帳號來源。
+- **勿提交**：`mcps/`、`release-assets*`、`.env*`、`*.exe`/`*.msi`、本機 `auth.json`／credentials（見根目錄 `.gitignore`）。
 
 ## 常用驗證
 
@@ -43,7 +49,16 @@
 npm test
 npm run build
 cd src-tauri
-cargo test
+cargo test   # 14 passed（含 Grok）
 cargo check
-npm run release:assets   # 可選：印出安裝檔路徑
+npm run release:assets   # 可選
 ```
+
+## 文件分工
+
+| 檔案 | 用途 |
+|------|------|
+| `AGENTS.md` | Agent 通用規範（本檔，與 CLAUDE 對齊） |
+| `CLAUDE.md` | 同上 + 實踐紀錄／故障排查 |
+| `CONTEXT.md` | 精簡交接：現況、最近任務、待辦 |
+| `README.md` | 使用者建置、下載、資料來源、FAQ |

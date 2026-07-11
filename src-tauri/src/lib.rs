@@ -251,7 +251,8 @@ fn scan_provider_environment() -> Vec<ProviderEnvironment> {
         inspect_path("claude-code", "Claude Code", home.join(".claude")),
         inspect_path("codex", "Codex", home.join(".codex")),
         inspect_antigravity(),
-        inspect_opencode(home),
+        inspect_opencode(home.clone()),
+        inspect_grok(home),
     ]
 }
 
@@ -322,6 +323,14 @@ fn refresh_dashboard_state(existing: DashboardState) -> DashboardState {
                 now,
             ),
             existing.accounts.iter().find(|a| a.provider == "opencode-go"),
+            now,
+        ),
+        merge_account_state(
+            refresh_grok_account(
+                provider_context(&contexts, &default_state, "grok"),
+                now,
+            ),
+            existing.accounts.iter().find(|a| a.provider == "grok"),
             now,
         ),
     ];
@@ -1118,6 +1127,237 @@ fn apply_opencode_windows(account: &mut UsageAccount, connection: &Connection, s
     }
 }
 
+// ---------------------------------------------------------------------------
+// Grok (xAI CLI) — weekly credits via cli-chat-proxy billing API
+// Auth: ~/.grok/auth.json (or $GROK_HOME/auth.json), same layout as Grok CLI / Orca.
+// ---------------------------------------------------------------------------
+
+const GROK_BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
+const GROK_CLI_AUTH_HEADER: &str = "xai-grok-cli";
+
+struct GrokAuthSession {
+    access_token: String,
+    user_id: Option<String>,
+    email: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GrokBillingResponse {
+    config: Option<GrokBillingConfig>,
+    #[serde(rename = "creditUsagePercent")]
+    credit_usage_percent: Option<f64>,
+    #[serde(rename = "currentPeriod")]
+    current_period: Option<GrokUsagePeriod>,
+    #[serde(rename = "billingPeriodEnd")]
+    billing_period_end: Option<String>,
+    #[serde(rename = "subscriptionTier")]
+    subscription_tier: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GrokBillingConfig {
+    #[serde(rename = "creditUsagePercent")]
+    credit_usage_percent: Option<f64>,
+    #[serde(rename = "currentPeriod")]
+    current_period: Option<GrokUsagePeriod>,
+    #[serde(rename = "billingPeriodEnd")]
+    billing_period_end: Option<String>,
+    #[serde(rename = "subscriptionTier")]
+    subscription_tier: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GrokUsagePeriod {
+    #[allow(dead_code)]
+    #[serde(rename = "type")]
+    period_type: Option<String>,
+    end: Option<String>,
+}
+
+fn grok_home_dir(home: &Path) -> PathBuf {
+    env::var_os("GROK_HOME")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| home.join(".grok"))
+}
+
+fn grok_auth_path(home: &Path) -> PathBuf {
+    grok_home_dir(home).join("auth.json")
+}
+
+fn read_grok_auth_session(auth_path: &Path) -> Option<GrokAuthSession> {
+    let raw = fs::read_to_string(auth_path).ok()?;
+    parse_grok_auth_json(&raw)
+}
+
+fn parse_grok_auth_json(raw: &str) -> Option<GrokAuthSession> {
+    let json: Value = serde_json::from_str(raw).ok()?;
+    let obj = json.as_object()?;
+    for entry in obj.values() {
+        let Some(key) = entry
+            .get("key")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        let user_id = entry
+            .get("user_id")
+            .and_then(Value::as_str)
+            .map(String::from);
+        let email = entry.get("email").and_then(Value::as_str).map(String::from);
+        return Some(GrokAuthSession {
+            access_token: key.to_string(),
+            user_id,
+            email,
+        });
+    }
+    None
+}
+
+fn fetch_grok_billing(session: &GrokAuthSession) -> Result<GrokBillingResponse, String> {
+    let mut last_error = String::new();
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(500 * attempt as u64));
+        }
+
+        let mut request = ureq::get(GROK_BILLING_URL)
+            .set("Authorization", &format!("Bearer {}", session.access_token))
+            .set("X-XAI-Token-Auth", GROK_CLI_AUTH_HEADER)
+            .set("Accept", "application/json")
+            .timeout(std::time::Duration::from_secs(15));
+
+        if let Some(user_id) = session.user_id.as_deref() {
+            request = request.set("x-userid", user_id);
+        }
+
+        match request.call() {
+            Ok(response) => {
+                return response.into_json().map_err(|e| e.to_string());
+            }
+            Err(ureq::Error::Status(code, _)) => {
+                last_error = format!("HTTP {code}");
+                if code == 401 || code == 403 {
+                    break;
+                }
+            }
+            Err(e) => {
+                last_error = e.to_string();
+            }
+        }
+    }
+    Err(last_error)
+}
+
+fn resolve_grok_billing_config(response: GrokBillingResponse) -> Option<GrokBillingConfig> {
+    if let Some(config) = response.config {
+        return Some(config);
+    }
+    if response.credit_usage_percent.is_some() {
+        return Some(GrokBillingConfig {
+            credit_usage_percent: response.credit_usage_percent,
+            current_period: response.current_period,
+            billing_period_end: response.billing_period_end,
+            subscription_tier: response.subscription_tier,
+        });
+    }
+    None
+}
+
+fn refresh_grok_account(context: ProviderContext, now: DateTime<Utc>) -> UsageAccount {
+    let mut account = base_account("grok-main", "grok", "Grok", "Grok", context.order, now);
+    let home = home_dir();
+    let auth_path = grok_auth_path(&home);
+
+    let Some(session) = read_grok_auth_session(&auth_path) else {
+        account.status = "disconnected".to_string();
+        account.notes = if auth_path.exists() {
+            "找到 Grok auth.json，但沒有有效 access token（請執行 grok login）。".to_string()
+        } else {
+            "找不到 Grok 登入憑證（請先執行 grok login）。".to_string()
+        };
+        return account;
+    };
+
+    if let Some(email) = session.email.as_deref().filter(|s| !s.is_empty()) {
+        account.account_name = email.to_string();
+    } else if let Some(user_id) = session.user_id.as_deref() {
+        account.account_name = user_id.to_string();
+    }
+
+    log_debug!(
+        "grok: token len={}, user_id={:?}",
+        session.access_token.len(),
+        session.user_id
+    );
+
+    match fetch_grok_billing(&session) {
+        Ok(response) => apply_grok_billing(&mut account, response, now),
+        Err(error) => {
+            log_debug!("grok: billing API FAILED: {}", error);
+            account.status = "connected".to_string();
+            account.accuracy = "estimated".to_string();
+            account.notes = format!(
+                "Grok billing API 暫時失敗：{}；額度視窗將在 API 恢復後顯示。",
+                error
+            );
+        }
+    }
+
+    account
+}
+
+fn apply_grok_billing(account: &mut UsageAccount, response: GrokBillingResponse, now: DateTime<Utc>) {
+    let Some(config) = resolve_grok_billing_config(response) else {
+        account.status = "connected".to_string();
+        account.accuracy = "official".to_string();
+        account.notes = "Grok billing 回傳成功，但未包含額度設定（可能為 API-key 方案）。".to_string();
+        log_debug!("grok: billing OK but no config/creditUsagePercent");
+        return;
+    };
+
+    let Some(used_percent) = config.credit_usage_percent else {
+        account.status = "connected".to_string();
+        account.accuracy = "official".to_string();
+        account.notes = "Grok billing 回傳成功，但未包含 creditUsagePercent。".to_string();
+        log_debug!("grok: billing OK but missing creditUsagePercent");
+        return;
+    };
+
+    let used = used_percent.clamp(0.0, 100.0);
+    let reset_at = config
+        .current_period
+        .as_ref()
+        .and_then(|period| period.end.clone())
+        .or(config.billing_period_end)
+        .unwrap_or_else(|| now.to_rfc3339());
+
+    if let Some(tier) = config
+        .subscription_tier
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        account.plan_name = format!("Grok {tier}");
+    } else {
+        account.plan_name = "Grok".to_string();
+    }
+
+    account.status = "available".to_string();
+    account.accuracy = "official".to_string();
+    account.notes = "已從 Grok CLI billing API 讀取每週額度。".to_string();
+    log_debug!("grok: weekly used={:.1}% reset_at={}", used, reset_at);
+    account.windows.push(window(
+        "grok-weekly",
+        "",
+        "weekly",
+        used,
+        100.0,
+        &reset_at,
+    ));
+}
+
 fn open_connection(app: &AppHandle) -> Result<Connection, String> {
     let app_dir = app
         .path()
@@ -1261,6 +1501,22 @@ fn inspect_antigravity() -> ProviderEnvironment {
     }
 }
 
+fn inspect_grok(home: PathBuf) -> ProviderEnvironment {
+    let auth_path = grok_auth_path(&home);
+    let detected = read_grok_auth_session(&auth_path).is_some();
+    ProviderEnvironment {
+        provider: "grok".to_string(),
+        label: "Grok".to_string(),
+        source: auth_path.display().to_string(),
+        detected,
+        detail: if detected {
+            "已找到 Grok CLI 登入憑證。".to_string()
+        } else {
+            "尚未找到 Grok 登入憑證（請先執行 grok login）。".to_string()
+        },
+    }
+}
+
 fn default_app_settings() -> AppSettings {
     AppSettings {
         locale: "zh-TW".to_string(),
@@ -1308,6 +1564,7 @@ fn default_dashboard_state() -> DashboardState {
                 3,
                 Utc::now(),
             ),
+            base_account("grok-main", "grok", "Grok", "Grok", 4, Utc::now()),
         ],
     }
 }
@@ -2056,6 +2313,81 @@ mod tests {
             base_account("antigravity-default", "antigravity", "Antigravity", "Antigravity", 2, Utc::now());
         apply_antigravity_quota(&mut account, models, None, Some("Google AI Pro"));
         assert_eq!(account.plan_name, "Antigravity Google AI Pro");
+    }
+
+    #[test]
+    fn test_parse_grok_auth_json() {
+        let raw = r#"{
+            "https://auth.x.ai::client": {
+                "key": "access-token-xyz",
+                "user_id": "user-1",
+                "email": "user@example.com",
+                "expires_at": "2026-07-11T13:11:39Z"
+            }
+        }"#;
+        let session = parse_grok_auth_json(raw).expect("should parse");
+        assert_eq!(session.access_token, "access-token-xyz");
+        assert_eq!(session.user_id.as_deref(), Some("user-1"));
+        assert_eq!(session.email.as_deref(), Some("user@example.com"));
+    }
+
+    #[test]
+    fn test_parse_grok_auth_json_skips_empty_entries() {
+        let raw = r#"{
+            "empty": {},
+            "valid": { "key": "tok", "email": "a@b.c" }
+        }"#;
+        let session = parse_grok_auth_json(raw).expect("should find valid entry");
+        assert_eq!(session.access_token, "tok");
+        assert!(parse_grok_auth_json(r#"{"a":{}}"#).is_none());
+        assert!(parse_grok_auth_json("not json").is_none());
+    }
+
+    #[test]
+    fn test_apply_grok_billing_weekly_window() {
+        let response: GrokBillingResponse = serde_json::from_str(
+            r#"{
+                "config": {
+                    "creditUsagePercent": 44.0,
+                    "subscriptionTier": "SuperGrok",
+                    "currentPeriod": {
+                        "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                        "start": "2026-07-10T11:33:28+08:00",
+                        "end": "2026-07-17T11:33:28+08:00"
+                    },
+                    "billingPeriodEnd": "2026-07-17T11:33:28+08:00"
+                }
+            }"#,
+        )
+        .unwrap();
+        let mut account = base_account("grok-main", "grok", "Grok", "Grok", 4, Utc::now());
+        apply_grok_billing(&mut account, response, Utc::now());
+
+        assert_eq!(account.status, "available");
+        assert_eq!(account.accuracy, "official");
+        assert_eq!(account.plan_name, "Grok SuperGrok");
+        assert_eq!(account.windows.len(), 1);
+        assert_eq!(account.windows[0].id, "grok-weekly");
+        assert_eq!(account.windows[0].kind, "weekly");
+        assert!((account.windows[0].used - 44.0).abs() < 0.001);
+        assert_eq!(account.windows[0].limit, 100.0);
+        assert!(account.windows[0].reset_at.contains("2026-07-17"));
+    }
+
+    #[test]
+    fn test_apply_grok_billing_flat_response() {
+        let response: GrokBillingResponse = serde_json::from_str(
+            r#"{
+                "creditUsagePercent": 12.5,
+                "billingPeriodEnd": "2026-07-20T00:00:00Z"
+            }"#,
+        )
+        .unwrap();
+        let mut account = base_account("grok-main", "grok", "Grok", "Grok", 4, Utc::now());
+        apply_grok_billing(&mut account, response, Utc::now());
+        assert_eq!(account.windows.len(), 1);
+        assert!((account.windows[0].used - 12.5).abs() < 0.001);
+        assert_eq!(account.plan_name, "Grok");
     }
 
     #[test]

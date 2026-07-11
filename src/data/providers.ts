@@ -33,6 +33,12 @@ export const providerMeta: Record<
     accent: "#f0bd4f",
     description: "偵測 OpenCode provider auth，依官方 dollar limits 追蹤。",
   },
+  grok: {
+    label: "Grok",
+    shortLabel: "Grok",
+    accent: "#e8e8e8",
+    description: "讀取 Grok CLI 登入憑證，顯示每週 credit 用量。",
+  },
 };
 
 export const providerOptions = Object.entries(providerMeta).map(([id, meta]) => ({

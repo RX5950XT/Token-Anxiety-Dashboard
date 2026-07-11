@@ -12,6 +12,31 @@ dist
 dist-ssr
 *.local
 
+# Secrets / local env (never commit)
+.env
+.env.*
+!.env.example
+
+# Local MCP tool schema dumps (agent cache, not project source)
+mcps/
+
+# Built installers kept locally after upload to GitHub Releases
+release-assets/
+release-assets-*/
+*.exe
+*.msi
+!scripts/**
+
+# Local app / SQLite dumps if dropped in repo root
+*.sqlite
+*.sqlite3
+*.db
+
+# Provider auth dumps (if accidentally copied into repo)
+**/auth.json
+**/.credentials.json
+**/credentials.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

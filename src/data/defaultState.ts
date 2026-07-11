@@ -157,6 +157,24 @@ export function createDefaultState(baseTime = Date.now()): DashboardState {
         3,
         "已從本機 opencode.db 讀取真實用量。",   
       ),
+      createAccount(
+        "grok-main",
+        "grok",
+        "Grok",
+        "Grok",
+        [
+          windowFor(
+            "grok-weekly",
+            "",
+            "weekly",
+            44,
+            100,
+            isoIn(baseTime, days(4.2)),
+          ),
+        ],
+        4,
+        "已從 Grok CLI billing API 讀取每週額度。",
+      ),
     ],
   };
 }

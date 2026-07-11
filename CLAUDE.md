@@ -11,29 +11,30 @@
 - 前端使用 React + TypeScript + Vite。
 - 本地狀態由 Rust command 寫入 SQLite，避免只依賴瀏覽器 storage。
 - Provider adapter 必須明確標示資料可信度：`official`、`local`、`estimated`、`manual`。
-- **同步改為手動**：右上角「同步」按鈕觸發，無自動定時刷新，避免背景耗額。
-- **F12 開啟 DevTools**：便於查看 `[Backend Diagnostics]` 後端除錯日誌群組。
-- **顯示項目設定**：設定頁可勾選顯示哪些 provider，存於 `AppSettings.visibleProviders`（`undefined` = 全部顯示）；前端 `App.tsx` 以此過濾卡片。
+- **手動同步**：右上角「同步」按鈕觸發，無自動定時刷新，避免背景耗額。
+- **F12 DevTools**：同步後 Console 輸出 `[Backend Diagnostics]` 後端日誌。
+- **顯示項目**：`AppSettings.visibleProviders`（`undefined`/`null` = 全部顯示）；前端用 `== null` 判斷。
+- **五個 Provider**：Claude Code、Codex、Antigravity、OpenCode、Grok。
 
 ## Provider 邊界與資料來源
 
 | Provider | 資料來源 | 視窗內容 | 備註 |
 |----------|---------|---------|------|
 | Claude Code | `~/.claude/.credentials.json` → Anthropic OAuth API | 5h rolling、7d weekly | 失敗時保留舊視窗最多 6 小時 |
-| Codex | `~/.codex/auth.json` → ChatGPT `/backend-api/wham/usage` | 5h rolling、weekly | 使用 ChatGPT access_token |
-| Antigravity | Windows 憑證管理員 `gemini:antigravity` → Google cloudcode-pa API | Claude/Gemini 各 **5h + weekly** 共 4 條 bar | `loadCodeAssist` → `retrieveUserQuotaSummary`（主）+ `fetchAvailableModels`（5h 後備）；額度滿時 bar 不消失；token 過期以建置時注入 OAuth client refresh |
-| OpenCode | `~/.local/share/opencode/opencode.db` | 5h rolling、7d、30d cost | 5h: `reset` = `max(time_created) + width`；weekly/monthly: **用戶手動設定重置時間** |
+| Codex | `~/.codex/auth.json` → ChatGPT `/backend-api/wham/usage` | 5h rolling、weekly | ChatGPT access_token |
+| Antigravity | Windows 憑證管理員 `gemini:antigravity` → Google cloudcode-pa | Claude/Gemini 各 **5h + weekly**（4 bar） | summary 主路徑 + models 5h 後備；額度滿 bar 不消失；僅 Windows |
+| OpenCode | `~/.local/share/opencode/opencode.db` | 5h、7d、30d cost | 5h reset = `max(time_created)+width`；weekly/monthly 手動設定 |
+| Grok | `~/.grok/auth.json`（或 `$GROK_HOME`）→ billing credits | **weekly** 一條 bar | `creditUsagePercent`；header 需 `X-XAI-Token-Auth: xai-grok-cli`；不自動 refresh |
 
-- Windows 外部 CLI 呼叫帶 `CREATE_NO_WINDOW`，不彈出終端機視窗。
-- Rust 端 `log_debug!` 巨集會寫入記憶體環形緩衝區；前端同步後會呼叫 `get_debug_logs` 並在 F12 console 輸出 `[Backend Diagnostics]`。
+- Windows 外部 CLI 呼叫帶 `CREATE_NO_WINDOW`。
+- Rust `log_debug!` → 記憶體環形緩衝；前端同步後 `get_debug_logs` 輸出 F12。
 
 ## 品質要求
 
-- 優先不可變資料更新，不直接 mutate React state。
-- 邊界輸入要驗證，provider 掃描失敗不可靜默吞掉。
-- 新增功能需補 Vitest 或 Rust 測試。
-- UI 新增互動時需檢查小視窗排版不重疊。
-- 不顯示「新增多帳號」入口，除非後續已能可靠辨識本機多帳號資料來源。
+- 優先不可變資料更新；邊界輸入要驗證；provider 掃描失敗不可靜默吞掉。
+- 新增功能需補 Vitest 或 Rust 測試；UI 注意小視窗排版。
+- 不顯示「新增多帳號」入口，除非能可靠辨識本機多帳號資料來源。
+- **勿提交**：`mcps/`、`release-assets*`、`.env*`、安裝檔 `*.exe`/`*.msi`、本機 auth／credentials（見 `.gitignore`）。
 
 ## 常用驗證
 
@@ -41,18 +42,18 @@
 npm test
 npm run build
 cd src-tauri
-cargo test
+cargo test   # 14 passed（含 Grok）
 cargo check
 npx tauri build
-npm run release:assets   # 印出與 GitHub 對齊的安裝檔路徑
+npm run release:assets
 ```
 
 ## 發佈與安裝檔檔名
 
-- `tauri.conf.json`：`productName` = `Token.Anxiety.Dashboard`（建置產物檔名），`app.windows.title` = `Token Anxiety Dashboard`（視窗標題）。
-- 產物：`Token.Anxiety.Dashboard_<version>_x64-setup.exe`、`Token.Anxiety.Dashboard_<version>_x64_en-US.msi`。
-- GitHub Releases：**新 tag 新 release**；勿對既有 release 使用 `gh release upload --clobber`。
-- 目前最新功能版：**v1.2.1**（Antigravity 四視窗）；v1.2.0 為初版 Antigravity（兩條 bar）。
+- `tauri.conf.json`：`productName` = `Token.Anxiety.Dashboard`，`app.windows.title` = `Token Anxiety Dashboard`。
+- 產物：`Token.Anxiety.Dashboard_<version>_x64-setup.exe`、`…_x64_en-US.msi`。
+- GitHub：**新 tag 新 release**；勿 `gh release upload --clobber`。
+- **已發佈最新 tag：v1.2.1**（Antigravity 四視窗）。**Grok 已在 main 程式碼**，發佈時建議 **v1.2.2**（或下一版號）。v1.2.0 = 初版 Antigravity（兩條 bar）。
 
 ---
 
@@ -60,149 +61,114 @@ npm run release:assets   # 印出與 GitHub 對齊的安裝檔路徑
 
 ### 一、OpenCode 的 Trailing Window 計算（最容易出錯）
 
-**檔案位置**：`src-tauri/src/lib.rs` → `query_opencode_cost`、`query_trailing_reset_at`、`calculate_next_weekly_reset`、`calculate_next_monthly_reset`
+**檔案**：`src-tauri/src/lib.rs` → `query_opencode_cost`、`query_trailing_reset_at`、`calculate_next_weekly_reset`、`calculate_next_monthly_reset`
 
-**核心發現**：OpenCode 的 `part` 表中的 `step-finish` 事件，其 `$.cost` 欄位存的是**單筆增量值**，不是累計值。因此直接用 `SUM(cost)` 即可得到窗口期間的總使用量。
+**核心**：`part` 表 `step-finish` 的 `$.cost` 是**單筆增量**，`SUM(cost)` 即窗口總用量。
 
-**5h Rolling Window**：
-- **used%**：`SUM(cost)` in 5h window / $12 limit
-- **reset**：`max(time_created) + 5h`（最後使用後 5 小時自動歸零）
-- 當 `now > reset_at` 時，窗口內無記錄，used% 自動變為 0%
+**5h Rolling**：used = `SUM(cost)` / $12；reset = `max(time_created) + 5h`；`now > reset_at` 時 used → 0%。
 
-**Weekly/Monthly Fixed Window**：
-- **used%**：`SUM(cost)` in window / limit
-- **reset**：由用戶在「設定」頁面手動設定
-  - weekly：星期幾 + 時間（如：週一 07:00）
-  - monthly：日期 + 時間（如：每月 29 號 00:00）
-  - 設定儲存在 `app_state` SQLite table（key = `app_settings`）
+**Weekly/Monthly**：used = `SUM(cost)` / limit；reset 由設定頁指定，存 `app_settings`。
 
-**設定 UI**：`src/components/SettingsDialog.tsx` → OpenCode 額度重置設定區段
-- 5h Rolling：唯讀顯示「自動計算（最後使用後 5 小時歸零）」
-- Weekly：星期幾下拉選單 + 時間選擇器
-- Monthly：日期下拉選單（1-31）+ 時間選擇器
+**診斷**：F12 `[Backend Diagnostics]` → `opencode:` 的 `query cost`、`latest record`、`calculated reset_at`。
 
-**診斷方式**：按 F12 → Console → 找 `[Backend Diagnostics]` 群組 → 看 `opencode:` 開頭的日誌：
-- `query cost since XX = Ok(YY)` → 確認 SUM(cost) 結果
-- `latest record since XX = Some(YY)` → 確認 `max(time_created)` 的值
-- `calculated reset_at = Some(ZZ)` → 確認 reset 時間
-
-**參考程式碼**：
-- `query_opencode_cost`：用 `SUM(json_extract(data, '$.cost'))` 計算窗口總成本
-- `query_trailing_reset_at`：用 `select max(time_created)` 抓最近使用時間（+ 5h = reset）
-- `calculate_next_weekly_reset` / `calculate_next_monthly_reset`：根據用戶設定計算下一次 reset 時間
-
-**官方文件對照**：
-- OpenCode Go 官網顯示的用量即為上述正確計算結果
-- 官方 Limit：5h = $12、7d = $30、30d = $60
+**官方 limit**：5h = $12、7d = $30、30d = $60。
 
 ---
 
-### 二、Antigravity 的 Quota API（取代已淘汰的 Gemini CLI）
+### 二、Antigravity 的 Quota API
 
-**檔案位置**：`src-tauri/src/lib.rs` → `read_antigravity_credentials`、`refresh_antigravity_token`、`fetch_antigravity_code_assist`、`fetch_antigravity_quota_summary`、`fetch_antigravity_models`、`apply_antigravity_quota`、`merge_antigravity_windows`、`refresh_antigravity_account`
+**檔案**：`read_antigravity_credentials`、`refresh_antigravity_token`、`fetch_antigravity_*`、`apply_antigravity_quota`、`merge_antigravity_windows`、`refresh_antigravity_account`
 
-**參考**：[lbjlaq/Antigravity-Manager](https://github.com/lbjlaq/Antigravity-Manager) v4.2.8 `modules/quota.rs`（`retrieveUserQuotaSummary`）。
+**參考**：[lbjlaq/Antigravity-Manager](https://github.com/lbjlaq/Antigravity-Manager) `retrieveUserQuotaSummary`。
 
-**本機憑證來源**：Antigravity 4.x 把登入 token 寫進 **Windows 憑證管理員**，target `gemini:antigravity`（type GENERIC），blob 為 UTF-8 JSON：`{ "token": { "access_token", "refresh_token", "expiry"(RFC3339) }, "auth_method" }`。用 Win32 FFI `CredReadW`/`CredFree` 讀取（僅 Windows）。
+**憑證**：Windows 憑證管理員 target `gemini:antigravity`（GENERIC），blob UTF-8 JSON。`CredReadW` 僅 Windows。
 
-**Token 更新**：解析 `expiry`，過期/接近過期（skew 15 分）/無法解析時 refresh；只在記憶體用新 token，**不寫回憑證管理員**。401 時強制 refresh 重試。client_id/secret 由建置時環境變數 `ANTIGRAVITY_CLIENT_ID`/`ANTIGRAVITY_CLIENT_SECRET` 經 `option_env!` 注入。
+**Token**：依 `expiry` 主動 refresh（skew 15 分）；不寫回憑證；401 強制 refresh。client 由 `ANTIGRAVITY_CLIENT_ID`/`SECRET` + `option_env!` 注入。
 
-**API 調用流程**：
-1. `POST {base}/v1internal:loadCodeAssist`，body `{"metadata":{"ideType":"ANTIGRAVITY"}}` → `cloudaicompanionProject` + `paidTier`/`currentTier` 方案名
-2. `POST {base}/v1internal:retrieveUserQuotaSummary`（best-effort）→ 解析 `groups[].buckets[]` 的 `5h` / `weekly`（bucketId 如 `gemini-5h`、`3p-weekly`）；依 group `displayName` 分 Claude / Gemini
-3. `POST {base}/v1internal:fetchAvailableModels` → summary 缺 5h 時後備；`claude-*`/`gemini-*` 各聚合最低 `remainingFraction`
-- base fallback：`daily-cloudcode-pa.sandbox` → `daily-cloudcode-pa` → `cloudcode-pa`；403 時去掉 `project` 重試；429/5xx 換 endpoint
+**流程**：`loadCodeAssist` → `retrieveUserQuotaSummary` → `fetchAvailableModels`（5h 後備）。四條 bar：Claude 5h/weekly、Gemini 5h/weekly。`used = (1 - remainingFraction) * 100`。缺欄位 = 100% used + merge 補 bar。
 
-**四條視窗（固定順序）**：Claude 5h → Claude weekly → Gemini 5h → Gemini weekly。Window ID：`antigravity-claude-5h`、`antigravity-claude-weekly`、`antigravity-gemini-5h`、`antigravity-gemini-weekly`。
-
-**已用%計算**：`used = (1.0 - remainingFraction) * 100.0`（本專案顯示已用%；Antigravity-Manager UI 顯示剩餘%）。
-
-**額度滿時 bar 不消失**：缺 `remainingFraction` 或整個 `quotaInfo` 視為 `remaining=0`；`merge_antigravity_windows` 從上次狀態補回缺失 bar（支援舊 ID `antigravity-claude`/`antigravity-gemini` 遷移）。
-
-**診斷方式**：F12 Console 看 `quotaSummary OK`、`antigravity: Claude/Gemini 5h/weekly used=..`。
+**診斷**：F12 `quotaSummary OK`、`antigravity: Claude/Gemini 5h/weekly used=..`。
 
 ---
 
 ### 三、Claude Code OAuth API
 
-**檔案位置**：`src-tauri/src/lib.rs` → `fetch_claude_usage`
-
-**API 端點**：`GET https://api.anthropic.com/api/oauth/usage`
-- 需要 Bearer token（來自 `~/.claude/.credentials.json` 的 `claudeAiOauth.accessToken`）
-- Header：`anthropic-beta: oauth-2025-04-20`
-
-**回傳格式**：
-- `five_hour.utilization`：0~100 的已用%（直接使用，不需計算）
-- `five_hour.resets_at`：ISO 8601 字串
-- `seven_day.utilization`：同上
-
-**Rate limit 處理**：API 經常回傳 HTTP 429。為避免視窗閃爍消失，`merge_account_state` 會在 API 失敗時保留舊視窗長達 **360 分鐘**（6 小時）。
+**端點**：`GET https://api.anthropic.com/api/oauth/usage`  
+Header：`anthropic-beta: oauth-2025-04-20`；Bearer 來自 `claudeAiOauth.accessToken`。  
+`five_hour` / `seven_day` 的 `utilization` 為已用%。常 429 → `merge_account_state` 保留舊視窗 360 分鐘。
 
 ---
 
 ### 四、Codex ChatGPT API
 
-**檔案位置**：`src-tauri/src/lib.rs` → `fetch_codex_usage_from_api`
-
-**API 端點**：`GET https://chatgpt.com/backend-api/wham/usage`
-- 需要 Bearer token（來自 `~/.codex/auth.json` 的 `tokens.access_token`）
-
-**回傳格式**：`rate_limit.primary_window` / `secondary_window`
-- `used_percent`：直接使用
-- `limit_window_seconds`：視窗寬度（秒）
-- `reset_at`：Unix timestamp（秒）
+**端點**：`GET https://chatgpt.com/backend-api/wham/usage`  
+Bearer 來自 `~/.codex/auth.json` 的 `tokens.access_token`。  
+`primary_window` / `secondary_window`：`used_percent`、`reset_at`（unix 秒）。
 
 ---
 
-### 五、Debug Log 系統
+### 五、Grok CLI 每週額度
 
-**Rust 端**：`src-tauri/src/lib.rs` → `log_debug!` 巨集
-- 寫入記憶體環形緩衝區 `DEBUG_LOGS`（上限 500 行）
-- 同時輸出到 `eprintln!`（release build 中不可見）
+**檔案**：`parse_grok_auth_json`、`fetch_grok_billing`、`apply_grok_billing`、`refresh_grok_account`
 
-**前端讀取**：`src/App.tsx` → `handleSync` → `getDebugLogs()`
-- 同步完成後自動在 F12 Console 輸出 `[Backend Diagnostics]` 群組
-- **這是排查 provider 資料問題的首要工具**
+**參考**：[stablyai/orca](https://github.com/stablyai/orca) `grok-fetcher.ts`、`grok-auth.ts`。
 
-**添加新日誌**：在 Rust 端任何需要觀察的地方使用：
+**憑證**：`$GROK_HOME/auth.json` 或 `~/.grok/auth.json`（map entry：`key`、`user_id`、`email`、`expires_at`…）。
+
+**API**：`GET https://cli-chat-proxy.grok.com/v1/billing?format=credits`  
+Headers：`Authorization: Bearer {key}`、`X-XAI-Token-Auth: xai-grok-cli`、`Accept: application/json`、可選 `x-userid`。  
+回傳：`config.creditUsagePercent`、`config.currentPeriod.end`、可選 `subscriptionTier`。週期型別多為 `USAGE_PERIOD_TYPE_WEEKLY`。
+
+**視窗**：`grok-weekly`（kind=`weekly`，limit=100）。**不**自動 refresh token。
+
+**診斷**：`grok: weekly used=..` 或 `grok: billing API FAILED`。
+
+---
+
+### 六、Debug Log 系統
+
+Rust：`log_debug!` → `DEBUG_LOGS`（上限 500 行）+ `eprintln!`。  
+前端：`handleSync` → `getDebugLogs()` → F12 `[Backend Diagnostics]`。
+
 ```rust
 log_debug!("[DIAG] provider: key={} value={}", key, value);
 ```
 
 ---
 
-### 六、成功經驗（給後續 AI 接手時避免重蹈覆轍）
+### 七、成功經驗
 
-1. **OpenCode `$.cost` 是增量值**：`part` 表的 `step-finish` 事件，`$.cost` 存的是**單次 step 的成本**，不是累計值。正確做法：`SUM(cost)` 即為窗口總用量。曾經誤以為是累計值而寫了 delta 邏輯，導致 used% 偏低。
-2. **OpenCode 5h reset = `max(time_created) + 5h`**：曾誤用 `min(time_created) + 5h`，導致 reset 時間固定為窗口最舊記錄 + 5h，永遠不歸零。正確應該用**最新使用時間** + 5h。
-3. **OpenCode weekly/monthly 必須手動設定**：從本地 DB 無法推斷用戶的實際重置時間（數據不足）。UI 提供 day-of-week + time picker（weekly）和 day-of-month + time picker（monthly），儲存在 `app_settings`。
-4. **Antigravity 憑證在 Windows 憑證管理員**：不是檔案。target `gemini:antigravity`，需 `CredReadW` 讀取。憑證裡的 `expiry`/API 的 `resetTime` 皆為 RFC3339（注意：PowerShell `ConvertFrom-Json` 會把它顯示成 `MM/DD/YYYY`，那是顯示假象，原始值是 RFC3339）。
-5. **Antigravity access_token 常已過期**：App 不在前景時 token 不會被刷新，讀到多半過期，故務必依 `expiry` 主動 refresh（並保留 401 重試）。refresh_token 不變、不要寫回憑證管理員。
-6. **Antigravity 四視窗**：以 `retrieveUserQuotaSummary` 為主、`fetchAvailableModels` 為 5h 後備；Claude/Gemini 各 5h + weekly，不要逐模型顯示。
-7. **Antigravity 額度滿時 API 常省略 quota 欄位**：缺欄位 = 100% used，並用 `merge_antigravity_windows` 補 bar，否則同步後進度條會消失。
-8. **Claude API 429 處理**：Anthropic OAuth API 經常 429。`merge_account_state` 的 360 分鐘快取是必要設計，避免視窗閃爍消失。
-9. **GitHub Release 勿覆蓋舊附件**：`gh release upload --clobber` 會替換同名檔案；發新版請新 tag（如 v1.2.1），建置檔名已與 GitHub 對齊，無需手動 rename。
+1. OpenCode `$.cost` 是增量 → 直接 `SUM`，勿做 delta。
+2. OpenCode 5h reset 用 `max(time_created)+5h`，不是 `min`。
+3. OpenCode weekly/monthly reset 必須使用者設定。
+4. Antigravity 憑證在 Windows 憑證管理員，不是檔案。
+5. Antigravity access_token 常過期 → 務必依 expiry refresh。
+6. Antigravity 四視窗：summary 主、models 後備；不要逐模型 bar。
+7. Antigravity 額度滿常省略欄位 → 100% used + merge。
+8. Claude 429 → 360 分鐘快取避免閃爍。
+9. Release 勿 `--clobber`；新版新 tag。
+10. Grok 只要 weekly；headers 必含 `X-XAI-Token-Auth: xai-grok-cli`。
+11. 本機 `mcps/`、`release-assets*` 不進 git。
 
-### 七、常見問題速查
+### 八、常見問題速查
 
-| 問題現象 | 可能原因 | 排查步驟 |
-|---------|---------|---------|
-| OpenCode 5h reset 時間過長（>4h） | `query_trailing_reset_at` 用了 `min` 而非 `max` | 檢查 F12 日誌中 `oldest record` vs `newest record`，reset 應為 newest + 5h |
-| OpenCode used% 遠低於官方 | 把 `$.cost` 當成累計值，做了不必要的 delta 計算 | 檢查 `query_opencode_cost` 是否直接用 `SUM(cost)` |
-| OpenCode weekly/monthly reset 不對 | 使用了硬編碼時間而非用戶設定 | 檢查 `get_settings` 是否讀到正確的 `opencode_weekly/monthly_reset` |
-| Antigravity 顯示未連線 | Windows 憑證管理員無 `gemini:antigravity` | `cmdkey /list` 確認；請先在 Antigravity 登入 |
-| Antigravity Claude/Gemini 皆 0% 或 API 失敗 | access_token 過期且 refresh 失敗 | 看 F12 `antigravity:` 日誌的 refresh 結果；必要時重新登入 Antigravity |
-| Antigravity bar 用盡後消失 | API 省略 `remainingFraction` 且未 merge | 確認 `apply_antigravity_quota` 缺欄位視為 100%；`merge_antigravity_windows` 有補回 |
-| Antigravity 只有 2 條 bar | 使用 v1.2.0 或 summary API 失敗 | 升級 v1.2.1；看 F12 是否有 `quotaSummary OK` |
-| Claude 視窗消失後又出現 | `merge_account_state` 360 分鐘快取生效 | 這是 feature，不是 bug |
-| 同步後 Console 無日誌 | `get_debug_logs` 呼叫失敗或無日誌產生 | 檢查 Rust 端是否有 `log_debug!` 呼叫 |
+| 問題現象 | 可能原因 | 排查 |
+|---------|---------|------|
+| OpenCode 5h reset 過長 | 用了 `min` 非 `max` | F12 newest + 5h |
+| OpenCode used% 過低 | 對 cost 做了 delta | 確認 `SUM(cost)` |
+| OpenCode weekly/monthly 不對 | 未讀用戶設定 | `opencode_*_reset` |
+| Antigravity 未連線 | 無 `gemini:antigravity` | `cmdkey /list`、先登入 App |
+| Antigravity 全 0% / API 失敗 | token 過期且 refresh 失敗 | F12 refresh；重登入 |
+| Antigravity bar 用盡消失 | 未 merge | exhausted + merge |
+| Antigravity 只有 2 條 bar | 舊版或 summary 失敗 | ≥v1.2.1；`quotaSummary OK` |
+| Claude 視窗短暫消失又出現 | 360 分快取 | feature |
+| Grok 未連線 | 無 auth 或無 `key` | `grok login`；`$GROK_HOME` |
+| Grok 401/403 | token 失效 | 重登入；檢查 header |
 
----
+### 九、外部參考
 
-### 八、外部參考連結
-
-- **OpenCode 官方（Crush 前身）**：https://github.com/opencode-ai/opencode（已 archive，轉移至 charmbracelet/crush）
-- **Antigravity-Manager（憑證/quota API 參考）**：https://github.com/lbjlaq/Antigravity-Manager
-- **CC-Switch 作者**：GitHub @jonz94（原始碼未公開，功能類似本專案）
-- **Tauri 文件**：https://tauri.app/
-- **Anthropic OAuth API 文件**：內部 beta，無公開文件（參考 `oauth-2025-04-20` header）
+- OpenCode（archive）→ charmbracelet/crush
+- [Antigravity-Manager](https://github.com/lbjlaq/Antigravity-Manager)
+- [Orca Grok rate-limits](https://github.com/stablyai/orca)
+- [Tauri](https://tauri.app/)
+- Anthropic OAuth：內部 beta（`oauth-2025-04-20`）

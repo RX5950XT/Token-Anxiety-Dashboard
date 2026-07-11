@@ -107,6 +107,13 @@ export async function scanProviderEnvironment(): Promise<ProviderEnvironment[]> 
         source: "~/.local/share/opencode/auth.json",
         detail: "瀏覽器預覽模式無法讀取 OpenCode auth。",
       },
+      {
+        provider: "grok",
+        label: "Grok",
+        detected: false,
+        source: "~/.grok/auth.json",
+        detail: "瀏覽器預覽模式無法讀取 Grok auth。",
+      },
     ];
   }
 }

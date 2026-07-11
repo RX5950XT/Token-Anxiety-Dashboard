@@ -60,7 +60,7 @@ describe("quota utilities", () => {
     const state = createDefaultState(0);
     const summary = summarizeDashboard(state, 0);
 
-    expect(summary.accountCount).toBe(4);
+    expect(summary.accountCount).toBe(5);
     expect(summary.nextResetLabel).toBe("1小時 36分");
   });
 });
