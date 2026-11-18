@@ -60,5 +60,5 @@ npm run release:assets   # 可選
 |------|------|
 | `AGENTS.md` | Agent 通用規範（本檔，與 CLAUDE 對齊） |
 | `CLAUDE.md` | 同上 + 實踐紀錄／故障排查 |
-| `CONTEXT.md` | 精簡交接：現況、最近任務、待辦 |
+| `tasks/todo.md` | 精簡交接：現況、決策、待辦（≤100 行） |
 | `README.md` | 使用者建置、下載、資料來源、FAQ |
